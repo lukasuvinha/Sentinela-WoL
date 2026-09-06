@@ -58,7 +58,7 @@ melchior-wol/
 ├── platformio.ini            # env esp32dev, platform fixado em 7.1.1
 ├── src/
 │   ├── main.cpp              # firmware
-│   └── secrets.example.h     # template publico, campos vazios
+│   └── secrets.example.h     # template publico, so placeholders
 └── .vscode/
     └── extensions.json       # recomenda a extensao PlatformIO
 ```
@@ -77,7 +77,7 @@ O que cada arquivo do `src/` faz:
 | Arquivo | Papel |
 |---|---|
 | `main.cpp` | Firmware. Inclui `secrets.h` e usa `SECRET_WIFI_SSID`/`SECRET_WIFI_PASSWORD`. MAC do melchior fixo no vetor `TARGET_MAC`. |
-| `secrets.example.h` | Template publicavel. Campos vazios. Serve de referencia para quem clonar o repo. |
+| `secrets.example.h` | Template publicavel. Contem os placeholders `PREENCHER_*`, nunca valores reais. Serve de referencia para quem clonar o repo. |
 | `secrets.h` | Credenciais reais da rede. Esta no `.gitignore`. Se nao existir, criar com `cp src/secrets.example.h src/secrets.h`. |
 
 ---
@@ -180,7 +180,10 @@ Demais regras:
 
 - O `.gitignore` so protege arquivo **nao rastreado**. Se algo ja foi
   commitado, continua no historico mesmo depois de entrar na lista.
-- O template `secrets.example.h` sempre com campos vazios.
+- O template `secrets.example.h` nunca recebe valor real. Ele carrega os
+  placeholders `PREENCHER_*`, e nao string vazia: o `static_assert` rejeita
+  os dois, mas ate entao o template usava `""` e a compilacao passava,
+  gerando firmware com credenciais em branco.
 - Antes do primeiro push, conferir o que realmente seria publicado:
   ```bash
   git add -A && git status --porcelain
@@ -320,15 +323,32 @@ Reiniciando em 10s para tentar de novo...
 
 ### Erro de compilacao esperado
 
-Se `secrets.h` ainda estiver com os placeholders, o build **falha de
-proposito**, antes de gerar firmware:
+Se as credenciais nao estiverem utilizaveis, o build **falha de
+proposito**, antes de gerar firmware. Sao duas checagens por campo,
+porque pegam descuidos diferentes:
 
-```
-error: static assertion failed: Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.
-```
+| Situacao | Mensagem |
+|---|---|
+| Copiou o template e nao editou | `Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.` |
+| Idem, campo da senha | `Preencha SECRET_WIFI_PASSWORD em src/secrets.h antes de compilar.` |
+| Apagou o SSID e deixou `""` | `SECRET_WIFI_SSID esta vazio em src/secrets.h. Nao existe rede sem nome.` |
+| Apagou a senha e deixou `""` | `SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.` |
 
-Isso e intencional: evita gravar uma placa com credencial invalida e
-so descobrir depois, olhando a serial.
+Isso e intencional: evita gravar uma placa com credencial invalida e so
+descobrir depois, olhando a serial — onde o sintoma seria um ciclo de
+reinicio sem explicacao.
+
+A checagem de string vazia foi acrescentada depois de uma auditoria
+mostrar que o caminho ensinado por este mesmo README
+(`cp src/secrets.example.h src/secrets.h`) compilava sem reclamar: o
+template usava `""`, e a unica checagem existente comparava contra
+`PREENCHER_*`. String vazia nao e igual ao placeholder, entao o build
+passava e produzia firmware com SSID e senha em branco.
+
+**Rede aberta.** Senha vazia e legitima apenas nesse caso. Para permitir,
+comentar o `static_assert` correspondente no `main.cpp` — ha um
+comentario no lugar explicando. Vale lembrar que rede aberta e escolha
+ruim para um aparelho que fica ligado permanentemente.
 
 ### 4. Verificar que o melchior acordou
 

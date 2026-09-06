@@ -75,16 +75,34 @@ const uint32_t PING_INTERVALO_MS  = 500;
 
 // ================================================================
 
-// Trava de compilacao: impede gravar um firmware com os placeholders
-// do secrets.example.h ainda por preencher. Sem isso o erro so
-// apareceria como uma falha de conexao silenciosa na serial.
+// Trava de compilacao: impede gravar um firmware sem credenciais uteis.
+// Sem isso o erro so apareceria como uma falha de conexao silenciosa na
+// serial, depois de a placa ja estar gravada.
+//
+// Sao duas checagens por campo, porque cada uma pega um descuido diferente:
+//   - mesmaString: copiou o secrets.example.h e esqueceu de editar
+//   - vazia:       apagou o valor e deixou "" (a string vazia passava
+//                  pela checagem de placeholder, entao o build seguia
+//                  e gerava firmware com SSID e senha em branco)
 static bool constexpr mesmaString(const char* a, const char* b) {
   return *a == *b && (*a == '\0' || mesmaString(a + 1, b + 1));
 }
+static bool constexpr vazia(const char* s) {
+  return *s == '\0';
+}
+
 static_assert(!mesmaString(SECRET_WIFI_SSID, "PREENCHER_SSID_AQUI"),
               "Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.");
+static_assert(!vazia(SECRET_WIFI_SSID),
+              "SECRET_WIFI_SSID esta vazio em src/secrets.h. Nao existe rede sem nome.");
+
 static_assert(!mesmaString(SECRET_WIFI_PASSWORD, "PREENCHER_SENHA_AQUI"),
               "Preencha SECRET_WIFI_PASSWORD em src/secrets.h antes de compilar.");
+// Rede aberta (sem senha) e o unico caso legitimo de senha vazia. Se for
+// esse o seu caso, comente o static_assert abaixo - mas note que uma rede
+// aberta e escolha ruim para um aparelho que fica ligado permanentemente.
+static_assert(!vazia(SECRET_WIFI_PASSWORD),
+              "SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.");
 
 WiFiUDP udp;
 
