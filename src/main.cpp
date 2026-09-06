@@ -221,6 +221,42 @@ void garantirWiFi() {
       Serial.println("Reiniciando em 10s para tentar de novo...");
       delay(10000);
       ESP.restart();   // dispositivo sem operador: tem que se recuperar sozinho
+
+      // ----------------------------------------------------------------
+      // ALTERNATIVA AVALIADA E MANTIDA INATIVA: retentar sem reiniciar
+      // ----------------------------------------------------------------
+      // PROPOSITO
+      //   Se o roteador ficar fora do ar por muito tempo, o ESP.restart()
+      //   acima vira um ciclo de reboot a cada ~40s (30s de timeout + 10s
+      //   de espera), indefinidamente. A alternativa seria insistir no
+      //   Wi-Fi aqui mesmo, sem nunca reiniciar.
+      //
+      // SOLUCAO PROPOSTA
+      //   Trocar as tres linhas acima (println + delay + ESP.restart) por:
+      //
+      //     inicio = millis();          // rearma o timeout e continua
+      //     WiFi.disconnect();
+      //     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      //     continue;
+      //
+      //   'inicio' precisa deixar de ser const para isso funcionar.
+      //
+      // POR QUE ESTA INATIVA
+      //   1. O restart limpa fragmentacao de heap acumulada. Num aparelho
+      //      que roda por meses sem parar, isso e uma vantagem real, nao
+      //      um efeito colateral: o reboot periodico e higiene.
+      //   2. O custo que o reboot tinha era desgaste de flash, porque
+      //      cada WiFi.begin() escrevia na NVS. Com o WiFi.persistent(false)
+      //      no setup(), esse custo deixou de existir.
+      //   3. O estado perdido no reboot (estado, tentativasWol) e barato
+      //      de reconstruir: o primeiro ciclo apos o boot ja pinga e
+      //      redescobre se o melchior esta no ar.
+      //
+      //   Ou seja: o ciclo de reboot nao e um defeito a corrigir, e o
+      //   comportamento de recuperacao escolhido. Este bloco fica aqui
+      //   para registrar que a alternativa foi considerada, e por que
+      //   nao foi adotada.
+      // ----------------------------------------------------------------
     }
     delay(300);
     Serial.print(".");

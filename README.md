@@ -339,6 +339,37 @@ melchior estiver desligado nesse momento, ele acorda.
 
 ---
 
+## Alternativas avaliadas e nao adotadas
+
+Registradas aqui e no `main.cpp` para nao serem reconsideradas do zero
+mais tarde.
+
+### Retentar o Wi-Fi sem reiniciar
+
+**Proposito.** Se o roteador ficar fora do ar por muito tempo, o
+`ESP.restart()` do `garantirWiFi()` vira um ciclo de reboot a cada ~40 s
+(30 s de timeout + 10 s de espera), indefinidamente. A alternativa seria
+insistir no Wi-Fi no proprio laco, sem nunca reiniciar.
+
+**Solucao proposta.** Trocar `println` + `delay` + `ESP.restart()` por um
+rearme do timeout seguido de `WiFi.begin()` e `continue`. O trecho exato
+esta comentado no `main.cpp`, junto do `ESP.restart()`.
+
+**Por que esta inativa.**
+
+1. O restart limpa fragmentacao de heap acumulada. Num aparelho que roda
+   por meses sem parar, isso e vantagem real: o reboot periodico e
+   higiene, nao efeito colateral.
+2. O custo do reboot era desgaste de flash, porque cada `WiFi.begin()`
+   escrevia na NVS. Com `WiFi.persistent(false)` no `setup()`, esse custo
+   deixou de existir.
+3. O estado perdido no reboot (`estado`, `tentativasWol`) e barato de
+   reconstruir: o primeiro ciclo apos o boot ja pinga e redescobre se o
+   melchior esta no ar.
+
+O ciclo de reboot nao e defeito a corrigir — e o comportamento de
+recuperacao escolhido.
+
 ## Estado conhecido
 
 - **Sem teste automatizado.** O firmware e simples o suficiente para
