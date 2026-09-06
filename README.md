@@ -375,6 +375,89 @@ melchior estiver desligado nesse momento, ele acorda.
 
 ---
 
+## Primeira gravacao: o que observar
+
+Checklist para a primeira meia hora com o monitor serial aberto, antes de
+deixar o aparelho sozinho na tomada. Em ordem de probabilidade real.
+
+### 1. UFW no melchior bloqueando ICMP  (o mais provavel)
+
+A sentinela decide tudo pelo ping. Se o firewall do melchior descartar
+ICMP echo, ela le "desligado" com o servidor ligado e passa a mandar
+Wake-on-LAN para sempre numa maquina que ja esta no ar. Os pacotes sao
+inofensivos, mas o diagnostico fica invertido e o log vira ruido.
+
+**Sintoma:** `SEM RESPOSTA` a cada ciclo, mesmo com o melchior ligado e
+respondendo `ping` de outra maquina.
+
+**Conferir no melchior:**
+
+```bash
+sudo ufw status verbose
+ping -c 3 192.168.1.100      # de outra maquina da rede
+```
+
+### 2. Wake-on-LAN nao armado  (o mais provavel para o wake falhar)
+
+O magic packet pode sair perfeito e o melchior nao acordar. Isso e
+configuracao do host, nao do firmware.
+
+**Conferir no melchior, antes de desligar:**
+
+```bash
+sudo ethtool <interface> | grep Wake-on    # precisa mostrar 'g'
+```
+
+Se mostrar `d`, o WoL esta desarmado. Ativar com `sudo ethtool -s
+<interface> wol g`, e tornar persistente (o ajuste nao sobrevive a
+reboot sozinho). Conferir tambem a BIOS/UEFI: "Wake on LAN" ou
+"Power on by PCI-E" habilitado.
+
+### 3. MAC da interface errada
+
+O `TARGET_MAC` precisa ser o da interface **cabeada**. Se por engano for
+o do Wi-Fi, o magic packet vai para um endereco que nao existe no
+segmento cabeado e nada acontece.
+
+```bash
+ip link    # no melchior, conferir qual MAC pertence a qual interface
+```
+
+### 4. Heap caindo ao longo do tempo  (o unico que so o hardware responde)
+
+O firmware imprime o heap livre a cada ciclo. Esta e a unica duvida do
+projeto que nenhuma analise estatica resolve: o `esp_ping` cria e destroi
+uma sessao a cada 5 min, para sempre, e o fonte nao e distribuido.
+
+**Como ler:** anotar o valor no primeiro ciclo e comparar depois de umas
+horas. Oscilando em torno de um patamar, nao ha vazamento. Caindo de forma
+continua, ha — e o sintoma final seria a mensagem
+`[erro] nao foi possivel criar a sessao de ping`.
+
+### 5. Wi-Fi
+
+Rede 2.4 GHz e sinal suficiente no local onde o ESP32 vai ficar. O
+firmware avisa explicitamente se nao conectar em 30 s.
+
+### Ja verificado, nao precisa observar
+
+O firmware deixa `on_ping_success` e `on_ping_timeout` como `NULL`,
+definindo so `on_ping_end`. Chegou a ser levantado se o ESP-IDF invocaria
+um ponteiro nulo e travaria no primeiro ping.
+
+**Nao trava.** Desmontando o `ping_sock.c.obj` do `liblwip.a` (o fonte nao
+e distribuido, mas o binario esta no toolchain), os tres callbacks sao
+carregados da struct da sessao e cada um passa por um `beqz` que desvia da
+chamada indireta quando o ponteiro e nulo:
+
+```
+l32i   a4, a2, 112    ; carrega o ponteiro do callback
+beqz   a4, <adiante>  ; se nulo, pula a chamada
+callx8 a4             ; so entao chama
+```
+
+Ficou registrado aqui para nao virar suspeita de novo.
+
 ## Alternativas avaliadas e nao adotadas
 
 Registradas aqui e no `main.cpp` para nao serem reconsideradas do zero
