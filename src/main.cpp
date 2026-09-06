@@ -306,8 +306,6 @@ void setup() {
   Serial.println(" min");
   Serial.println();
 
-  WiFi.mode(WIFI_STA);   // explicito: nunca subir como access point
-
   // Nao gravar as credenciais na NVS. O padrao do core e persistent(true),
   // o que faz cada WiFi.begin() ter a flash como destino de escrita. Aqui
   // isso nao serve para nada: SSID e senha ja vem compilados no firmware,
@@ -315,8 +313,17 @@ void setup() {
   // roteador fica fora do ar e o dispositivo reinicia a cada ~40s
   // indefinidamente (ver garantirWiFi). De quebra, deixa de existir uma
   // segunda copia da senha fora do binario.
+  //
+  // A ORDEM IMPORTA e nao e obvia: persistent() apenas grava uma flag
+  // interna (_persistent). Quem age sobre ela e wifiLowLevelInit(), que
+  // so chama esp_wifi_set_storage(WIFI_STORAGE_RAM) se a flag estiver
+  // false - e roda UMA UNICA VEZ, protegida por lowLevelInitDone.
+  // Como WiFi.mode() dispara esse init, chamar persistent(false) depois
+  // do mode() nao tem efeito nenhum: o storage ja ficou em NVS e nao ha
+  // segunda chance. Por isso esta linha vem antes do mode() abaixo.
   WiFi.persistent(false);
 
+  WiFi.mode(WIFI_STA);   // explicito: nunca subir como access point
   WiFi.setAutoReconnect(true);
   garantirWiFi();
 }

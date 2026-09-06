@@ -196,6 +196,14 @@ Demais regras:
   que guardaria a senha tambem na NVS — uma segunda copia, sem utilidade
   aqui, ja que as credenciais vem compiladas via `secrets.h`.
 
+  **A chamada precisa vir antes de `WiFi.mode()`**, e isso nao e obvio:
+  `persistent()` so grava uma flag interna. Quem age sobre ela e
+  `wifiLowLevelInit()`, que roda uma unica vez (protegida por
+  `lowLevelInitDone`) e e disparada justamente pelo `WiFi.mode()`. Chamar
+  `persistent(false)` depois do `mode()` nao tem efeito nenhum — o
+  storage ja ficou em NVS e nao ha segunda chance. Quem reordenar o
+  `setup()` desfaz a protecao sem nenhum aviso do compilador.
+
 ---
 
 ## Como gravar no ESP32
