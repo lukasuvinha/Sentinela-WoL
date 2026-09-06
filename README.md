@@ -310,6 +310,14 @@ Confira tambem se a rede e 2.4 GHz (o ESP32 nao fala 5 GHz).
 Reiniciando em 10s para tentar de novo...
 ```
 
+### Outras mensagens da serial
+
+| Mensagem | Significado |
+|---|---|
+| `Wi-Fi desconectado. Reconectando...` | Normal e transitorio. Toda rede cai de vez em quando; o firmware reconecta sozinho. Preocupante so se aparecer a cada ciclo. |
+| `[erro] nenhum magic packet saiu. Problema de rede no ESP32.` | O `sendto()` falhou nas tres tentativas. Nao e o melchior: e a pilha de rede do proprio ESP32. Costuma vir junto de instabilidade de Wi-Fi. |
+| `[erro] nao foi possivel criar a sessao de ping` | **A mais importante das tres.** Significa que o `esp_ping_new_session()` nao conseguiu alocar. A causa provavel e falta de heap — ou seja, e o sintoma que confirmaria o vazamento discutido acima. Se aparecer, conferir o valor de heap livre nos ciclos anteriores: ele deve estar baixo e em queda. |
+
 ### Erro de compilacao esperado
 
 Se `secrets.h` ainda estiver com os placeholders, o build **falha de
