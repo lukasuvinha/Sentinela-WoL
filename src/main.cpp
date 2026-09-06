@@ -288,7 +288,16 @@ void setup() {
 void loop() {
   garantirWiFi();
 
-  Serial.print("Verificando o melchior... ");
+  // O heap livre entra no log de cada ciclo de proposito. Este aparelho
+  // cria e destroi uma sessao de ping a cada 5 min, para sempre (~105 mil
+  // por ano), e o fonte do esp_ping nao e distribuido - so o liblwip.a
+  // compilado. Ou seja: nao da para descartar vazamento por inspecao.
+  // Com o numero no log, a pergunta vira observavel: se cair de forma
+  // continua ao longo de dias, ha vazamento; se oscilar em torno de um
+  // valor estavel, nao ha.
+  Serial.print("Verificando o melchior (heap livre: ");
+  Serial.print(ESP.getFreeHeap());
+  Serial.print(" bytes)... ");
 
   if (melchiorResponde()) {
     if (estado != ONLINE) {

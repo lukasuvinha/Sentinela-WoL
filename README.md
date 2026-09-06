@@ -264,9 +264,21 @@ MAC para o WoL: AA:BB:CC:DD:EE:FF
 Intervalo de monitoramento: 5 min
 
 Wi-Fi OK. IP do ESP32: 192.168.1.xxx
-Verificando o melchior... ONLINE.
-Verificando o melchior... continua online.
+Verificando o melchior (heap livre: 268412 bytes)... ONLINE.
+Verificando o melchior (heap livre: 268408 bytes)... continua online.
 ```
+
+O **heap livre** aparece em todo ciclo de proposito. O aparelho cria e
+destroi uma sessao de ping a cada 5 min, para sempre (~105 mil por ano),
+e o fonte do `esp_ping` nao e distribuido — so o `liblwip.a` compilado.
+Nao da para descartar vazamento por inspecao de codigo. Com o numero no
+log, a duvida vira observavel:
+
+- oscila em torno de um valor estavel -> sem vazamento
+- cai de forma continua ao longo de dias -> ha vazamento
+
+Deixar o monitor serial aberto por algumas horas depois de gravar e
+suficiente para tirar essa duvida.
 
 A partir dai repete `continua online` a cada 5 minutos. Com o melchior
 desligado:
