@@ -271,6 +271,16 @@ void setup() {
   Serial.println();
 
   WiFi.mode(WIFI_STA);   // explicito: nunca subir como access point
+
+  // Nao gravar as credenciais na NVS. O padrao do core e persistent(true),
+  // o que faz cada WiFi.begin() ter a flash como destino de escrita. Aqui
+  // isso nao serve para nada: SSID e senha ja vem compilados no firmware,
+  // via secrets.h. Desligar elimina desgaste de flash no cenario em que o
+  // roteador fica fora do ar e o dispositivo reinicia a cada ~40s
+  // indefinidamente (ver garantirWiFi). De quebra, deixa de existir uma
+  // segunda copia da senha fora do binario.
+  WiFi.persistent(false);
+
   WiFi.setAutoReconnect(true);
   garantirWiFi();
 }

@@ -192,6 +192,9 @@ Demais regras:
   resolve — o valor continua no historico do git.
 - Quem tem o firmware tem a senha da rede. Se o ESP32 for emprestado,
   descartado ou vendido, apagar a flash (`esptool.py erase_flash`).
+- O firmware chama `WiFi.persistent(false)`. O padrao do core e `true`, o
+  que guardaria a senha tambem na NVS — uma segunda copia, sem utilidade
+  aqui, ja que as credenciais vem compiladas via `secrets.h`.
 
 ---
 
