@@ -1,12 +1,12 @@
 /*
-  ESP32 - Sentinela de Wake-on-LAN do Melchior
-  --------------------------------------------
+  ESP32 - Sentinela de Wake-on-LAN
+  --------------------------------
   Compilado e gravado via PlatformIO no VS Code / VSCodium.
 
-  Funcao do dispositivo: manter o melchior ligado.
+  Funcao do dispositivo: manter uma maquina da rede ligada.
 
   Fluxo continuo:
-    ONLINE   -> pinga o melchior a cada 5 min. Enquanto responder, so observa.
+    ONLINE   -> pinga o alvo a cada 5 min. Enquanto responder, so observa.
     OFFLINE  -> nao respondeu: envia magic packet, espera o boot, pinga de novo.
                 Se ainda nao subiu, repete indefinidamente ate ligar.
                 Quando ligar, volta para ONLINE.
@@ -22,7 +22,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include "secrets.h"   // credenciais reais - fica fora do git
+#include <WebServer.h>   // vem no core do ESP32; nao exige lib_deps
+#include "secrets.h"     // credenciais reais - fica fora do git
 
 // API de ping nativa do ESP-IDF. Ja vem no liblwip.a do core,
 // nao precisa de biblioteca externa em lib_deps.
@@ -39,15 +40,45 @@ const char* WIFI_SSID     = SECRET_WIFI_SSID;
 const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
 
 // --- Alvo ---
-// MAC da placa de rede do Melchior (NAO e o MAC do ESP32).
-// Windows: ipconfig /all   |   Linux: ip link
-// MAC de exemplo do template (nunca foi o do melchior, esse era o bug):
-// byte TARGET_MAC[6] = { 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E };
-byte TARGET_MAC[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+// Os tres campos abaixo descrevem a maquina vigiada e vem do secrets.h,
+// que fica fora do git: sao dados da rede de quem instalou, nao do
+// projeto. Trocar os tres adapta a sentinela para outra maquina, sem
+// tocar em logica nenhuma.
 
-// IP fixo do melchior (definido por netplan, sem reserva de DHCP).
-// E o alvo do ping. Se o IP mudar, mudar aqui tambem.
-IPAddress MELCHIOR_IP(192, 168, 1, 100);
+// So o nome usado nas mensagens da serial e na pagina de status.
+const char* ALVO_NOME = SECRET_ALVO_NOME;
+
+// MAC da interface cabeada do alvo (NAO e o MAC do ESP32).
+// Windows: ipconfig /all   |   Linux: ip link
+byte ALVO_MAC[6] = { SECRET_ALVO_MAC };
+
+// EPISODIO REGISTRADO - nao ha codigo para reativar aqui.
+//
+// O projeto nasceu de um template de Wake-on-LAN que trazia o MAC de
+// exemplo 00:1A:2B:3C:4D:5E embutido no firmware. Esse valor ficou no
+// lugar do MAC real por engano, e a sentinela passou um tempo mandando
+// magic packet para um endereco que nao existe na rede: o pacote saia
+// perfeito, nada acontecia, e nao havia erro nenhum em lugar nenhum.
+//
+// Fica anotado porque o sintoma - WoL "funcionando" e alvo que nunca
+// acorda - e dos mais dificeis de diagnosticar do zero. E foi esse
+// episodio que motivou as travas de compilacao de SECRET_ALVO_MAC e
+// SECRET_ALVO_IP, mais abaixo: hoje um MAC de exemplo esquecido nao
+// chega a virar firmware.
+
+// IP fixo do alvo, usado pelo ping. Precisa ser fixo: com DHCP o
+// endereco muda e a sentinela passa a pingar outra maquina, ou nenhuma.
+// Na instalacao que originou o projeto, e fixado por netplan no proprio
+// servidor, sem reserva de DHCP no roteador.
+IPAddress ALVO_IP(SECRET_ALVO_IP);
+
+// --- Endereco do proprio ESP32 ---
+// IP fixo para que a pagina de status tenha um endereco estavel. Com DHCP
+// o IP muda sem aviso e a pagina "some" justamente quando alguem precisa
+// dela. Ver o bloco em garantirWiFi() sobre como voltar a DHCP.
+IPAddress ESP32_IP(SECRET_ESP32_IP);
+IPAddress GATEWAY_IP(SECRET_GATEWAY_IP);
+IPAddress MASCARA_REDE(SECRET_MASCARA_REDE);
 
 // Broadcast "limitado": nao depende da faixa de IP da rede,
 // entao trocar de roteador/provedor nao exige mexer aqui.
@@ -64,9 +95,12 @@ const unsigned long ESPERA_POS_WOL_MS          = 90UL * 1000UL;        // 90 s
 const unsigned long INTERVALO_RETENTATIVA_MS   = 5UL * 60UL * 1000UL;  // 5 min
 
 // Quantas tentativas rapidas antes de espacar as retentativas. Evita
-// martelar a rede quando o melchior esta fisicamente desligado da tomada,
+// martelar a rede quando o alvo esta fisicamente desligado da tomada,
 // sem nunca desistir (o requisito e insistir ate ligar).
 const int TENTATIVAS_RAPIDAS = 3;
+
+// Reinicio periodico de higiene. Ver o bloco no inicio do loop().
+const unsigned long REINICIO_PERIODICO_MS = 24UL * 60UL * 60UL * 1000UL;  // 24 h
 
 // --- Ping ---
 const uint32_t PINGS_POR_CHECAGEM = 3;      // considera online com 1 resposta
@@ -104,11 +138,160 @@ static_assert(!mesmaString(SECRET_WIFI_PASSWORD, "PREENCHER_SENHA_AQUI"),
 static_assert(!vazia(SECRET_WIFI_PASSWORD),
               "SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.");
 
-WiFiUDP udp;
+static_assert(!mesmaString(SECRET_ALVO_NOME, "PREENCHER_NOME_DO_ALVO"),
+              "Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.");
+static_assert(!vazia(SECRET_ALVO_NOME),
+              "SECRET_ALVO_NOME esta vazio em src/secrets.h.");
 
-enum EstadoMelchior { DESCONHECIDO, ONLINE, OFFLINE };
-EstadoMelchior estado = DESCONHECIDO;
+// MAC e IP tambem tem trava, e sao os dois campos que mais precisam
+// dela: MAC errado nao gera erro nenhum em execucao (o magic packet sai
+// perfeito para um endereco que nao existe) e IP errado faz a sentinela
+// concluir que o alvo vive desligado. Este projeto ja foi vitima desse
+// exato bug - ver o registro no topo do arquivo.
+//
+// O tamanho dos vetores abaixo e DEDUZIDO da lista do secrets.h, e nao
+// fixado em 6 e 4. E isso que permite pegar um MAC com cinco bytes, que
+// de outra forma compilaria e teria o sexto preenchido com zero em
+// silencio.
+constexpr byte    MAC_CONFERENCIA[] = { SECRET_ALVO_MAC };
+constexpr uint8_t IP_CONFERENCIA[]  = { SECRET_ALVO_IP };
+
+static_assert(sizeof(MAC_CONFERENCIA) == 6,
+              "SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.");
+static_assert(sizeof(IP_CONFERENCIA) == 4,
+              "SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.");
+
+// Comparacao byte a byte com os valores de exemplo do secrets.example.h,
+// para pegar o "copiei o template e esqueci de editar".
+constexpr bool mesmoVetor(const uint8_t* a, const uint8_t* b, int n) {
+  return n == 0 || (*a == *b && mesmoVetor(a + 1, b + 1, n - 1));
+}
+
+constexpr uint8_t MAC_EXEMPLO[] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+constexpr uint8_t IP_EXEMPLO[]  = { 192, 168, 1, 100 };
+
+static_assert(!mesmoVetor(MAC_CONFERENCIA, MAC_EXEMPLO, 6),
+              "SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.");
+static_assert(!mesmoVetor(IP_CONFERENCIA, IP_EXEMPLO, 4),
+              "SECRET_ALVO_IP ainda e o exemplo. Troque em src/secrets.h pelo IP real do alvo.");
+
+// Mesmas travas para os enderecos do proprio aparelho.
+constexpr uint8_t ESP32_CONFERENCIA[]   = { SECRET_ESP32_IP };
+constexpr uint8_t GATEWAY_CONFERENCIA[] = { SECRET_GATEWAY_IP };
+constexpr uint8_t MASCARA_CONFERENCIA[] = { SECRET_MASCARA_REDE };
+
+static_assert(sizeof(ESP32_CONFERENCIA) == 4,
+              "SECRET_ESP32_IP precisa ter exatamente 4 octetos em src/secrets.h.");
+static_assert(sizeof(GATEWAY_CONFERENCIA) == 4,
+              "SECRET_GATEWAY_IP precisa ter exatamente 4 octetos em src/secrets.h.");
+static_assert(sizeof(MASCARA_CONFERENCIA) == 4,
+              "SECRET_MASCARA_REDE precisa ter exatamente 4 octetos em src/secrets.h.");
+
+constexpr uint8_t ESP32_EXEMPLO[]   = { 192, 168, 1, 197 };
+constexpr uint8_t GATEWAY_EXEMPLO[] = { 192, 168, 1, 1 };
+
+static_assert(!mesmoVetor(ESP32_CONFERENCIA, ESP32_EXEMPLO, 4),
+              "SECRET_ESP32_IP ainda e o exemplo. Troque em src/secrets.h.");
+static_assert(!mesmoVetor(GATEWAY_CONFERENCIA, GATEWAY_EXEMPLO, 4),
+              "SECRET_GATEWAY_IP ainda e o exemplo. Troque em src/secrets.h pelo IP do seu roteador.");
+
+// A mascara e a UNICA sem trava de valor, de proposito. 255.255.255.0 e a
+// mascara legitima da grande maioria das redes domesticas: rejeitar o
+// valor de exemplo daria falso positivo em quase toda instalacao real, e
+// obrigaria a inventar um valor "nao-exemplo" que provavelmente estaria
+// errado. So a quantidade de octetos e conferida.
+
+WiFiUDP udp;
+WebServer server(80);
+
+enum EstadoAlvo { DESCONHECIDO, ONLINE, OFFLINE };
+EstadoAlvo estado = DESCONHECIDO;
 int tentativasWol = 0;
+
+// Momento da ultima transicao de estado, para a pagina dizer ha quanto
+// tempo o alvo esta como esta.
+unsigned long estadoDesde       = 0;
+unsigned long ultimaVerificacao = 0;
+unsigned long proximaEspera     = 0;
+int totalWolDesdeBoot           = 0;
+
+// ---------------------------------------------------------------
+// Historico de ocorrencias
+// ---------------------------------------------------------------
+// Vetor circular de tamanho FIXO, reservado uma vez e imutavel dali em
+// diante. Sem String, sem new, sem malloc, sem std::vector.
+//
+// A razao e direta: este aparelho fica meses ligado registrando eventos.
+// Texto de tamanho dinamico neste caminho significaria alocar e liberar
+// blocos de tamanhos variados milhares de vezes, que e a receita de
+// fragmentacao de heap - exatamente o problema de memoria que o projeto
+// passou uma revisao inteira descartando. Nao faz sentido reintroduzi-lo
+// pela porta dos fundos so para ter um log bonito.
+//
+// Entram aqui apenas OCORRENCIAS, nunca o tique de rotina. Com o
+// "continua online" de cada ciclo, as 20 posicoes se esgotariam em 100
+// minutos e o historico nao serviria para nada.
+const int HISTORICO_TAMANHO = 20;
+const int HISTORICO_TEXTO   = 56;
+
+struct Ocorrencia {
+  unsigned long quando;
+  char texto[HISTORICO_TEXTO];
+};
+
+Ocorrencia historico[HISTORICO_TAMANHO];
+int historicoProximo = 0;   // onde a proxima entrada sera escrita
+int historicoTotal   = 0;   // quantas ja foram gravadas (satura em HISTORICO_TAMANHO)
+
+// printf-like, mas escrevendo direto no espaco ja reservado. O snprintf
+// trunca no limite do buffer em vez de estourar.
+void registrar(const char* formato, ...) {
+  Ocorrencia& o = historico[historicoProximo];
+  o.quando = millis();
+
+  va_list args;
+  va_start(args, formato);
+  vsnprintf(o.texto, HISTORICO_TEXTO, formato, args);
+  va_end(args);
+
+  historicoProximo = (historicoProximo + 1) % HISTORICO_TAMANHO;
+  if (historicoTotal < HISTORICO_TAMANHO) historicoTotal++;
+}
+
+// ---------------------------------------------------------------
+// Reinicio com o motivo preservado
+// ---------------------------------------------------------------
+// O historico acima vive na RAM comum, entao um reinicio o apaga. Isso
+// deixava um buraco justamente no que mais importa: os eventos que
+// disparam o reinicio eram os unicos que nunca chegavam a aparecer na
+// pagina, porque o proprio reinicio que eles anunciavam os destruia.
+//
+// A solucao aqui e minima de proposito - so o contador e o motivo do
+// ultimo reinicio, em RTC RAM, que sobrevive ao reset por software.
+// Mover o historico inteiro para ca traria o problema dos horarios:
+// millis() zera no boot, e as entradas antigas passariam a mentir sobre
+// quando aconteceram.
+//
+// A RTC RAM NAO sobrevive a queda de energia, e essa e a semantica
+// desejada: falta de luz nao e sintoma de defeito, e o contador deve
+// mesmo voltar a zero. A palavra magica distingue dado nosso de lixo
+// depois de um power-on, quando a regiao vem com qualquer coisa.
+const uint32_t RTC_MAGIA = 0x5E4E7114;
+
+RTC_DATA_ATTR uint32_t rtcMagia;
+RTC_DATA_ATTR uint32_t rtcReinicios;
+RTC_DATA_ATTR char     rtcMotivo[48];
+
+// Caminho unico de reinicio: nenhum ESP.restart() solto no resto do
+// arquivo. Assim nao existe reinicio sem motivo registrado.
+void reiniciar(const char* motivo) {
+  snprintf(rtcMotivo, sizeof(rtcMotivo), "%s", motivo);
+  rtcReinicios++;
+  rtcMagia = RTC_MAGIA;
+  Serial.flush();
+  delay(100);
+  ESP.restart();
+}
 
 // ---------------------------------------------------------------
 // Wake-on-LAN
@@ -126,7 +309,7 @@ bool enviarMagicPacket() {
 
   // MAC do alvo repetido 16x (6 x 16 = 96 bytes)
   for (int i = 0; i < 16; i++) {
-    memcpy(&pacote[6 + i * 6], TARGET_MAC, 6);
+    memcpy(&pacote[6 + i * 6], ALVO_MAC, 6);
   }
 
   if (udp.beginPacket(BROADCAST_IP, WOL_PORT) != 1) {
@@ -137,7 +320,7 @@ bool enviarMagicPacket() {
 }
 
 // Dispara o magic packet REPETICOES vezes. Retorna quantas sairam.
-int acordarMelchior() {
+int acordarAlvo() {
   int enviados = 0;
   for (int i = 0; i < REPETICOES; i++) {
     if (enviarMagicPacket()) enviados++;
@@ -160,10 +343,27 @@ static void aoFinalizarPing(esp_ping_handle_t hdl, void* args) {
   pingFinalizado = true;
 }
 
-// true = o melchior respondeu pelo menos um ICMP echo.
+// O WebServer so processa requisicao quando handleClient() e chamado.
+// Como o laco principal passa ate 5 minutos parado esperando, sem isso a
+// pagina responderia apenas nas frestas entre as esperas e pareceria
+// quebrada. Por isso esta funcao e chamada de dentro de cada laco que
+// dorme.
+void atenderWeb() {
+  server.handleClient();
+}
+
+// true = o alvo respondeu pelo menos um ICMP echo.
 // Uma unica perda de pacote nao derruba o diagnostico: sao
 // PINGS_POR_CHECAGEM tentativas e basta uma resposta.
-bool melchiorResponde() {
+//
+// O false desta funcao tem um significado unico: o alvo nao
+// respondeu. Falha do proprio ESP32 nunca sai por aqui como false -
+// nesses casos o aparelho reinicia. A razao e que quem chama usa o
+// false como "o alvo esta desligado" e reage mandando Wake-on-LAN;
+// se um defeito local virasse esse mesmo false, a sentinela passaria
+// a martelar WoL para sempre num alvo que talvez esteja no ar,
+// e o log culparia o alvo por um problema que e daqui.
+bool alvoResponde() {
   esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
 
   ip_addr_t alvo;
@@ -171,7 +371,7 @@ bool melchiorResponde() {
   alvo.type = IPADDR_TYPE_V4;
   // IPAddress e ip4_addr_t guardam os octetos na mesma ordem,
   // entao o cast direto e valido nas duas pontas.
-  alvo.u_addr.ip4.addr = (uint32_t)MELCHIOR_IP;
+  alvo.u_addr.ip4.addr = (uint32_t)ALVO_IP;
 
   cfg.target_addr = alvo;
   cfg.count       = PINGS_POR_CHECAGEM;
@@ -187,17 +387,53 @@ bool melchiorResponde() {
   esp_ping_handle_t hdl = NULL;
   if (esp_ping_new_session(&cfg, &cbs, &hdl) != ESP_OK || hdl == NULL) {
     Serial.println("  [erro] nao foi possivel criar a sessao de ping");
-    return false;
+    // Nao da para criar a sessao quando falta heap ou nao ha socket
+    // livre - as duas coisas sao doenca do ESP32, e nenhuma delas diz
+    // nada sobre o alvo. Seguir daqui como se fosse "alvo caido"
+    // renderia WoL a toa e um log mentiroso. Pior: se for falta de
+    // heap, o quadro so piora a cada ciclo. Reiniciar devolve a memoria
+    // e os sockets ao estado inicial, que e o unico jeito de sair
+    // dessa daqui de dentro.
+    reiniciar("falha ao criar a sessao de ping");
+    return false;   // inalcancavel: reiniciar() nao retorna
   }
 
-  esp_ping_start(hdl);
+  if (esp_ping_start(hdl) != ESP_OK) {
+    Serial.println("  [erro] nao foi possivel iniciar a sessao de ping");
+    // A sessao existe mas nao arrancou: sobrou a task, o timer ou algum
+    // recurso interno. De novo, defeito local e nao diagnostico do alvo.
+    // Sem stop() aqui porque nada chegou a rodar - so o delete, para nao
+    // deixar a sessao pendurada antes do reboot.
+    esp_ping_delete_session(hdl);
+    reiniciar("falha ao iniciar a sessao de ping");
+    return false;   // inalcancavel: reiniciar() nao retorna
+  }
 
   // Teto de seguranca: se o callback nunca vier, nao trava o loop.
+  // A folga de 5000UL e generosa de proposito. Com uma folga apertada,
+  // um atraso benigno estouraria o prazo e seria confundido com defeito;
+  // com esta, estourar significa que a task do ping realmente nao
+  // terminou, e ai o reboot abaixo se justifica.
   const unsigned long teto =
-      PINGS_POR_CHECAGEM * (PING_TIMEOUT_MS + PING_INTERVALO_MS) + 2000UL;
+      PINGS_POR_CHECAGEM * (PING_TIMEOUT_MS + PING_INTERVALO_MS) + 5000UL;
   const unsigned long inicio = millis();
   while (!pingFinalizado && (millis() - inicio) < teto) {
+    atenderWeb();
     delay(50);
+  }
+
+  if (!pingFinalizado) {
+    Serial.println("  [erro] a sessao de ping nao terminou dentro do prazo");
+    // O callback nunca veio. A task do ping travou ou morreu, e sem ela
+    // pingRespostas fica em zero para sempre - o que sairia daqui como
+    // "alvo desligado" em toda checagem seguinte, indefinidamente.
+    // E o pior dos tres casos justamente por ser silencioso: a sentinela
+    // continuaria "funcionando", so que cega. Encerra a sessao pelo
+    // caminho normal e reinicia, que e o que recupera a task.
+    esp_ping_stop(hdl);
+    esp_ping_delete_session(hdl);
+    reiniciar("ping sem retorno dentro do prazo");
+    return false;   // inalcancavel: reiniciar() nao retorna
   }
 
   // Obrigatorio: sem o delete a sessao vaza memoria a cada checagem,
@@ -214,11 +450,12 @@ bool melchiorResponde() {
 
 // Mantem a conexao viva. O Wi-Fi cai eventualmente em qualquer
 // dispositivo que fica meses ligado; sem isso o ping falharia e o
-// firmware acharia que o melchior caiu, mandando WoL a toa.
+// firmware acharia que o alvo caiu, mandando WoL a toa.
 void garantirWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
   Serial.println("Wi-Fi desconectado. Reconectando...");
+  registrar("Wi-Fi caiu - reconectando");
 
   // Fecha o socket UDP antes de reconectar. O WiFiUDP reaproveita o
   // mesmo socket para sempre depois de criado (beginPacket retorna cedo
@@ -227,6 +464,23 @@ void garantirWiFi() {
   udp.stop();
 
   WiFi.disconnect();
+
+  // ---------------- IP FIXO - inicio do bloco ----------------
+  // Fica aqui, e nao so no setup(), para valer tambem em toda reconexao:
+  // assim a configuracao nao depende da ordem das chamadas la em cima.
+  //
+  // PARA VOLTAR A DHCP: comente a linha WiFi.config abaixo. O aparelho
+  // passa a pegar endereco do roteador, e o IP obtido aparece na serial
+  // logo depois de "Wi-Fi OK. IP do ESP32:". A pagina de status continua
+  // funcionando, so que num endereco que pode mudar sem aviso.
+  //
+  // O ESP32_IP precisa estar FORA da faixa de DHCP do roteador. Dentro
+  // dela, o roteador pode entregar o mesmo endereco a outro aparelho e
+  // criar conflito - os dois somem da rede de forma intermitente, que e
+  // dos sintomas mais chatos de diagnosticar.
+  WiFi.config(ESP32_IP, GATEWAY_IP, MASCARA_REDE, GATEWAY_IP);
+  // ---------------- IP FIXO - fim do bloco -------------------
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   const unsigned long inicio = millis();
@@ -237,8 +491,10 @@ void garantirWiFi() {
       Serial.println("Confira SSID/senha em src/secrets.h.");
       Serial.println("Confira tambem se a rede e 2.4 GHz (o ESP32 nao fala 5 GHz).");
       Serial.println("Reiniciando em 10s para tentar de novo...");
+      Serial.flush();
       delay(10000);
-      ESP.restart();   // dispositivo sem operador: tem que se recuperar sozinho
+      // dispositivo sem operador: tem que se recuperar sozinho
+      reiniciar("Wi-Fi nao conectou dentro do prazo");
 
       // ----------------------------------------------------------------
       // ALTERNATIVA AVALIADA E MANTIDA INATIVA: retentar sem reiniciar
@@ -268,7 +524,7 @@ void garantirWiFi() {
       //      no setup(), esse custo deixou de existir.
       //   3. O estado perdido no reboot (estado, tentativasWol) e barato
       //      de reconstruir: o primeiro ciclo apos o boot ja pinga e
-      //      redescobre se o melchior esta no ar.
+      //      redescobre se o alvo esta no ar.
       //
       //   Ou seja: o ciclo de reboot nao e um defeito a corrigir, e o
       //   comportamento de recuperacao escolhido. Este bloco fica aqui
@@ -283,27 +539,199 @@ void garantirWiFi() {
   Serial.println();
   Serial.print("Wi-Fi OK. IP do ESP32: ");
   Serial.println(WiFi.localIP());
+  registrar("Wi-Fi reconectado");
+
+  // O socket de escuta do servidor nao sobrevive a queda da interface -
+  // mesmo motivo que ja obriga o udp.stop() logo acima. Sem este par
+  // stop/begin a pagina para de abrir depois da primeira reconexao, e
+  // ninguem descobre ate o dia em que for precisar dela.
+  server.stop();
+  server.begin();
 }
 
-// Espera em blocos de 1s em vez de um delay() unico de 5 minutos.
-// A reconexao do Wi-Fi durante a espera fica por conta do
-// setAutoReconnect(true); quem confere de fato e o garantirWiFi()
-// no inicio de cada ciclo do loop.
+// Espera em blocos curtos em vez de um delay() unico de 5 minutos, para
+// que o servidor web seja atendido durante a espera. Com blocos de 1s a
+// pagina demorava ate um segundo para responder cada requisicao, o que
+// na pratica a fazia parecer travada.
 // A subtracao de unsigned long trata o overflow de millis()
 // (~49 dias) corretamente - por isso nao se compara millis() > alvo.
 void esperar(unsigned long ms) {
   const unsigned long inicio = millis();
   while (millis() - inicio < ms) {
-    delay(1000);
+    atenderWeb();
+    delay(50);
   }
 }
 
 void imprimirMacAlvo() {
   for (int i = 0; i < 6; i++) {
-    if (TARGET_MAC[i] < 0x10) Serial.print("0");
-    Serial.print(TARGET_MAC[i], HEX);
+    if (ALVO_MAC[i] < 0x10) Serial.print("0");
+    Serial.print(ALVO_MAC[i], HEX);
     if (i < 5) Serial.print(":");
   }
+}
+
+// ---------------------------------------------------------------
+// Pagina de status
+// ---------------------------------------------------------------
+// Sem JavaScript e sem recurso externo de proposito: a pagina precisa
+// abrir mesmo com a internet fora, que e justamente quando alguem vai
+// querer olhar o estado do servidor de casa. O meta refresh basta.
+//
+// Os buffers abaixo sao locais e de tamanho fixo, pela mesma razao do
+// historico: nada de String nesta rota, que pode ser chamada muitas
+// vezes por minuto se alguem deixar a aba aberta.
+
+// Escreve "3d 4h 12min" em buf. Omite as unidades maiores quando zero.
+void formatarDuracao(char* buf, size_t tam, unsigned long ms) {
+  unsigned long s = ms / 1000UL;
+  unsigned long d = s / 86400UL;
+  unsigned long h = (s % 86400UL) / 3600UL;
+  unsigned long m = (s % 3600UL) / 60UL;
+  if (d > 0)      snprintf(buf, tam, "%lud %luh %lumin", d, h, m);
+  else if (h > 0) snprintf(buf, tam, "%luh %lumin", h, m);
+  else            snprintf(buf, tam, "%lumin", m);
+}
+
+const char* nomeEstado() {
+  switch (estado) {
+    case ONLINE:  return "ONLINE";
+    case OFFLINE: return "OFFLINE";
+    default:      return "verificando";
+  }
+}
+
+// Envia um pedaco sem criar String. O overload (const char*, size_t) do
+// WebServer escreve direto no socket; a versao que recebe String alocaria
+// e liberaria um bloco a cada chamada.
+inline void enviar(const char* s) {
+  server.sendContent(s, strlen(s));
+}
+
+void paginaStatus() {
+  const unsigned long agora = millis();
+  // Buffer unico, reaproveitado a cada pedaco. 320 e folgado de proposito:
+  // o snprintf trunca em SILENCIO, e o corte cai no meio de uma tag HTML,
+  // quebrando a pagina sem nenhum sinal de erro. Alem disso ALVO_NOME vem
+  // do secrets.h, onde nada limita o tamanho - um nome de maquina comprido
+  // consome a margem sozinho.
+  //
+  // Quem acrescentar linhas na tabela abaixo precisa reconferir este valor:
+  // o maior snprintf daqui ja usa ~176 bytes so de HTML literal.
+  char buf[320];
+  char t1[32], t2[32];
+
+  // Transmissao em blocos (chunked): a pagina nunca existe inteira na
+  // memoria. Montar tudo numa String antes de enviar pediria ~4 KB de
+  // heap por requisicao, e com o refresh de 10s isso seria dezenas de
+  // milhares de alocacoes por dia - o churn que o resto do projeto evita.
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html; charset=utf-8", "");
+
+  // Sem JavaScript e sem recurso externo de proposito: a pagina precisa
+  // abrir mesmo com a internet fora, que e justamente quando alguem vai
+  // querer olhar o estado do servidor de casa. O meta refresh basta.
+  enviar("<!DOCTYPE html><html lang='pt-br'><head><meta charset='utf-8'>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<meta http-equiv='refresh' content='10'>"
+         "<title>Sentinela de Wake-on-LAN</title><style>"
+         "body{font-family:system-ui,sans-serif;margin:0;padding:16px;"
+         "background:#12141a;color:#e6e6e6;line-height:1.5}"
+         "h1{font-size:1.1rem;margin:0 0 4px}"
+         "h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;"
+         "color:#8a93a6;margin:22px 0 6px;font-weight:600}"
+         ".big{font-size:1.7rem;font-weight:700;margin:6px 0 0}"
+         ".on{color:#4ade80}.off{color:#f87171}.unk{color:#facc15}"
+         "table{width:100%;border-collapse:collapse;font-size:.9rem}"
+         "td{padding:6px 0;border-bottom:1px solid #262a35;vertical-align:top}"
+         "td:first-child{color:#8a93a6;width:48%}"
+         "ul{padding:0;margin:0}"
+         "li{font-size:.85rem;padding:6px 0;border-bottom:1px solid #262a35;"
+         "list-style:none}"
+         ".t{color:#8a93a6;font-variant-numeric:tabular-nums}"
+         ".nota{color:#6b7280;font-size:.75rem;margin-top:6px}"
+         "</style></head><body><h1>Sentinela de Wake-on-LAN</h1>");
+
+  // Estado atual e ha quanto tempo
+  formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
+  const char* cor = (estado == ONLINE) ? "on" : (estado == OFFLINE ? "off" : "unk");
+  snprintf(buf, sizeof(buf),
+           "<div class='big %s'>%s</div><div class='t'>ha %s</div>",
+           cor, nomeEstado(), t1);
+  enviar(buf);
+
+  // Verificacao
+  enviar("<h2>Verificacao</h2><table>");
+  formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
+  const unsigned long decorrido = agora - ultimaVerificacao;
+  if (proximaEspera > decorrido) {
+    formatarDuracao(t2, sizeof(t2), proximaEspera - decorrido);
+  } else {
+    snprintf(t2, sizeof(t2), "agora");
+  }
+  snprintf(buf, sizeof(buf),
+           "<tr><td>Ultima</td><td>ha %s</td></tr>"
+           "<tr><td>Proxima em</td><td>%s</td></tr>"
+           "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
+           "<tr><td>WoL desde o boot</td><td>%d</td></tr></table>",
+           t1, t2, tentativasWol, totalWolDesdeBoot);
+  enviar(buf);
+
+  // ESP32
+  enviar("<h2>ESP32</h2><table>");
+  formatarDuracao(t1, sizeof(t1), agora);
+  snprintf(buf, sizeof(buf),
+           "<tr><td>Ligado ha</td><td>%s</td></tr>"
+           "<tr><td>Heap livre</td><td>%u B</td></tr>"
+           "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
+           t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  enviar(buf);
+  snprintf(buf, sizeof(buf),
+           "<tr><td>IP</td><td>%s</td></tr>"
+           "<tr><td>MAC</td><td>%s</td></tr>",
+           WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  enviar(buf);
+
+  if (rtcReinicios == 0) {
+    enviar("<tr><td>Reinicios</td><td>nenhum desde a ultima queda de "
+           "energia</td></tr></table>");
+  } else {
+    snprintf(buf, sizeof(buf),
+             "<tr><td>Reinicios</td><td>%u desde a ultima queda de energia"
+             "<br>ultimo: %s</td></tr></table>",
+             (unsigned)rtcReinicios, rtcMotivo);
+    enviar(buf);
+  }
+  enviar("<div class='nota'>O minimo e o pior momento de memoria livre "
+         "desde que o aparelho ligou.</div>");
+
+  // Alvo
+  snprintf(buf, sizeof(buf),
+           "<h2>%s</h2><table>"
+           "<tr><td>IP</td><td>%s</td></tr>"
+           "<tr><td>MAC</td><td>%02X:%02X:%02X:%02X:%02X:%02X</td></tr></table>",
+           ALVO_NOME, ALVO_IP.toString().c_str(),
+           ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
+           ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
+  enviar(buf);
+
+  // Ocorrencias, da mais recente para a mais antiga
+  enviar("<h2>Ocorrencias</h2><ul>");
+  if (historicoTotal == 0) {
+    enviar("<li>nenhuma ainda</li>");
+  } else {
+    for (int i = 0; i < historicoTotal; i++) {
+      int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
+      formatarDuracao(t1, sizeof(t1), agora - historico[idx].quando);
+      snprintf(buf, sizeof(buf),
+               "<li><span class='t'>ha %s</span><br>%s</li>",
+               t1, historico[idx].texto);
+      enviar(buf);
+    }
+  }
+  enviar("</ul></body></html>");
+
+  server.sendContent("", 0);   // encerra o chunked
 }
 
 // ---------------------------------------------------------------
@@ -313,15 +741,42 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println("=== Sentinela de Wake-on-LAN do Melchior ===");
-  Serial.print("Alvo do ping: ");
-  Serial.println(MELCHIOR_IP);
-  Serial.print("MAC para o WoL: ");
+  Serial.println("=== Sentinela de Wake-on-LAN ===");
+
+  // Le o que sobreviveu ao ultimo reinicio. Lixo de power-on nao passa
+  // pela palavra magica, e ai a contagem recomeca - que e o certo: queda
+  // de energia nao e sintoma de defeito.
+  if (rtcMagia != RTC_MAGIA) {
+    rtcMagia     = RTC_MAGIA;
+    rtcReinicios = 0;
+    rtcMotivo[0] = '\0';
+  } else if (rtcReinicios > 0) {
+    Serial.print("Reinicios desde a ultima queda de energia: ");
+    Serial.println(rtcReinicios);
+    Serial.print("Motivo do ultimo: ");
+    Serial.println(rtcMotivo);
+    // Reinjeta no historico para o evento aparecer na pagina. Sem isso o
+    // motivo morreria com a RAM que o proprio reinicio apagou.
+    registrar("Reiniciou: %s", rtcMotivo);
+  }
+  Serial.print("Alvo: ");
+  Serial.print(ALVO_NOME);
+  Serial.print("  ");
+  Serial.print(ALVO_IP);
+  Serial.print("  ");
   imprimirMacAlvo();
   Serial.println();
   Serial.print("Intervalo de monitoramento: ");
   Serial.print(INTERVALO_MONITORAMENTO_MS / 60000UL);
   Serial.println(" min");
+
+  // MAC do proprio ESP32. Serve para criar reserva de DHCP no roteador e
+  // para identificar o aparelho na lista de clientes - sem isso ele fica
+  // como mais um dispositivo sem nome no meio dos outros.
+  Serial.print("MAC do ESP32: ");
+  Serial.println(WiFi.macAddress());
+  Serial.print("Pagina de status: http://");
+  Serial.println(ESP32_IP);
   Serial.println();
 
   // Nao gravar as credenciais na NVS. O padrao do core e persistent(true),
@@ -343,45 +798,96 @@ void setup() {
 
   WiFi.mode(WIFI_STA);   // explicito: nunca subir como access point
   WiFi.setAutoReconnect(true);
+
+  // A rota vem antes do garantirWiFi() porque e ele que chama
+  // server.begin() no fim. Registrando depois, o servidor passaria alguns
+  // milissegundos escutando sem rota nenhuma.
+  server.on("/", paginaStatus);
+
   garantirWiFi();
+
+  estadoDesde       = millis();
+  ultimaVerificacao = millis();
+  registrar("Boot do ESP32");
+
+  server.begin();
 }
 
 void loop() {
+  // Reinicio periodico de higiene. E defesa cega, nao diagnostico: serve
+  // contra degradacao que este codigo nao tem como perceber sozinho.
+  //
+  // Dois casos motivam. O primeiro e fragmentacao de heap - o total livre
+  // pode continuar alto enquanto nao existe mais nenhum bloco contiguo
+  // grande, e nao ha como checar isso de dentro com confianca. O segundo,
+  // mais grave, e a pilha de Wi-Fi entrar num estado em que reporta
+  // WL_CONNECTED sem trafego real passar: o ping falha honestamente, a
+  // sentinela conclui "alvo desligado" e passa a mandar Wake-on-LAN
+  // para sempre num servidor que esta ligado o tempo todo.
+  //
+  // Nao ha condicao de estado aqui de proposito - reinicia mesmo com o
+  // alvo offline no meio das tentativas. Depois do boot o primeiro
+  // ciclo pinga em ~30 s, atraso irrelevante contra o intervalo de
+  // retentativa de 5 min. Condicionar so criaria um caminho em que o
+  // aparelho degradado nunca se recupera justamente por estar ocupado.
+  if (millis() > REINICIO_PERIODICO_MS) {
+    Serial.println("Reinicio periodico de higiene (24h de funcionamento).");
+    reiniciar("reinicio periodico de higiene (24h)");
+  }
+
   garantirWiFi();
 
-  // O heap livre entra no log de cada ciclo de proposito. Este aparelho
-  // cria e destroi uma sessao de ping a cada 5 min, para sempre (~105 mil
-  // por ano), e o fonte do esp_ping nao e distribuido - so o liblwip.a
-  // compilado. Ou seja: nao da para descartar vazamento por inspecao.
-  // Com o numero no log, a pergunta vira observavel: se cair de forma
-  // continua ao longo de dias, ha vazamento; se oscilar em torno de um
-  // valor estavel, nao ha.
-  Serial.print("Verificando o melchior (heap livre: ");
+  // O heap livre entra no log de cada ciclo como termometro de
+  // fragmentacao, nao de vazamento.
+  //
+  // Criar e destruir uma sessao de ping a cada 5 min, para sempre (~105
+  // mil por ano), ja levantou a duvida de vazamento. Ela esta encerrada.
+  // O fonte e publico, em components/lwip/apps/ping/ping_sock.c no
+  // repositorio espressif/esp-idf, e mostra que esp_ping_delete_session()
+  // apenas marca a sessao para encerrar. Quem libera e a task interna do
+  // ping, que devolve memoria, buffer do pacote, socket e a si mesma em
+  // ate ~1 s. Contra 5 min ate a proxima verificacao, nao vaza.
+  Serial.print("Verificando o ");
+  Serial.print(ALVO_NOME);
+  Serial.print(" (heap livre: ");
   Serial.print(ESP.getFreeHeap());
   Serial.print(" bytes)... ");
 
-  if (melchiorResponde()) {
+  ultimaVerificacao = millis();
+
+  if (alvoResponde()) {
     if (estado != ONLINE) {
       Serial.println("ONLINE.");
       if (estado == OFFLINE) {
         Serial.print("Subiu depois de ");
         Serial.print(tentativasWol);
         Serial.println(" tentativa(s) de Wake-on-LAN.");
+        registrar("%s ONLINE apos %d tentativa(s) de WoL", ALVO_NOME, tentativasWol);
+      } else {
+        registrar("%s ONLINE (ja estava ligado no boot)", ALVO_NOME);
       }
       estado = ONLINE;
+      estadoDesde = millis();
       tentativasWol = 0;
     } else {
+      // Nao registra: o tique de rotina esgotaria o historico em 100 min.
       Serial.println("continua online.");
     }
 
+    proximaEspera = INTERVALO_MONITORAMENTO_MS;
     esperar(INTERVALO_MONITORAMENTO_MS);
     return;
   }
 
   // Nao respondeu: tratar como desligado e acordar.
   Serial.println("SEM RESPOSTA.");
+  if (estado != OFFLINE) {
+    registrar("%s parou de responder", ALVO_NOME);
+    estadoDesde = millis();
+  }
   estado = OFFLINE;
   tentativasWol++;
+  totalWolDesdeBoot++;
 
   Serial.print("Enviando Wake-on-LAN (tentativa ");
   Serial.print(tentativasWol);
@@ -389,10 +895,12 @@ void loop() {
   imprimirMacAlvo();
   Serial.println();
 
-  const int enviados = acordarMelchior();
+  const int enviados = acordarAlvo();
   if (enviados == 0) {
     Serial.println("  [erro] nenhum magic packet saiu. Problema de rede no ESP32.");
+    registrar("ERRO: nenhum magic packet saiu (tentativa %d)", tentativasWol);
   } else {
+    registrar("WoL enviado - tentativa %d, %d/%d pacotes", tentativasWol, enviados, REPETICOES);
     Serial.print("  ");
     Serial.print(enviados);
     Serial.print("/");
@@ -401,10 +909,12 @@ void loop() {
   }
 
   // Nas primeiras tentativas espera so o tempo de boot; depois disso
-  // espaca, presumindo que o melchior esta fora da tomada. Nunca desiste.
+  // espaca, presumindo que o alvo esta fora da tomada. Nunca desiste.
   const unsigned long espera = (tentativasWol <= TENTATIVAS_RAPIDAS)
                                    ? ESPERA_POS_WOL_MS
                                    : INTERVALO_RETENTATIVA_MS;
+
+  proximaEspera = espera;
 
   Serial.print("Aguardando ");
   Serial.print(espera / 1000UL);

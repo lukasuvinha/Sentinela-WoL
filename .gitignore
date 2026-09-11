@@ -54,6 +54,18 @@ compile_commands.json
 .vscode/ipch
 .claude/settings.local.json
 
+# Relatorios e rascunhos de sessao de trabalho. Ficam no diretorio do
+# projeto por conveniencia, mas nao sao o projeto - um "git add -A"
+# publicaria material de bastidor no repositorio.
+#
+# ATENCAO: os relatorios de revisao contem o MAC e o IP reais da rede em
+# texto claro, discutindo justamente o que tirar do codigo. Esta linha e o
+# que impede isso de chegar a um repositorio publico. Nao remover.
+Claude outputs/
+
+# Workflow pessoal de quem desenvolve, nao faz parte do projeto publicado.
+CLAUDE.md
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
