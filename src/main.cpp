@@ -335,9 +335,25 @@ void registrar(const char* formato, ...) {
 // depois de um power-on, quando a regiao vem com qualquer coisa.
 const uint32_t RTC_MAGIA = 0x5E4E7114;
 
-RTC_DATA_ATTR uint32_t rtcMagia;
-RTC_DATA_ATTR uint32_t rtcReinicios;
-RTC_DATA_ATTR char     rtcMotivo[48];
+// RTC_NOINIT_ATTR, e NAO RTC_DATA_ATTR. A diferenca nao aparece no nome
+// e custou um defeito silencioso: RTC_DATA_ATTR poe a variavel na secao
+// .rtc.data, que e PROGBITS e faz parte de um segmento LOAD do binario -
+// ou seja, o bootloader a recopia da flash a CADA boot, por cima do que
+// estava na RTC RAM. Ela sobrevive ao deep sleep, que nao usamos, e nao
+// sobrevive ao reset, que e o unico caso que nos interessa. O resultado
+// era o contador preso em zero para sempre: a palavra magica nunca casava,
+// porque nunca havia lixo para distinguir - havia sempre zero vindo da
+// flash. RTC_NOINIT_ATTR poe na .rtc_noinit, que e NOBITS e fica fora de
+// qualquer LOAD: ninguem escreve nela no boot, entao o valor atravessa o
+// reset e vem com lixo de verdade depois de um power-on, que e exatamente
+// o que a palavra magica acima existe para peneirar.
+//
+// Se um dia isso voltar para RTC_DATA_ATTR, o contador volta a mentir sem
+// emitir erro nenhum. Para conferir: xtensa-esp32-elf-readelf -S no .elf,
+// e os simbolos tem que cair em .rtc_noinit.
+RTC_NOINIT_ATTR uint32_t rtcMagia;
+RTC_NOINIT_ATTR uint32_t rtcReinicios;
+RTC_NOINIT_ATTR char     rtcMotivo[48];
 
 // Caminho unico de reinicio: nenhum ESP.restart() solto no resto do
 // arquivo. Assim nao existe reinicio sem motivo registrado.
