@@ -474,6 +474,34 @@ empurrada para fora antes de alguém ter chance de ver. O histórico existe
 para responder "o que aconteceu de diferente", e uma lista de vinte
 `continua online` não responde nada.
 
+### As categorias de ocorrência
+
+O firmware registra seis categorias de evento. A lista abaixo é **das
+categorias**, não das mensagens: o texto exato de cada ocorrência não é
+transcrito aqui de propósito.
+
+| Categoria | Quando entra |
+|---|---|
+| Boot | Uma vez por inicialização, antes de tudo |
+| Transição de Wi-Fi | Primeira conexão, queda e reconexão — os três com textos distintos |
+| Mudança de estado do alvo | Passou a responder, ou parou de responder |
+| Wake-on-LAN enviado | Uma por tentativa, com o número da tentativa e quantos pacotes saíram |
+| Erro | Falha que o firmware detectou e não conseguiu resolver sozinho |
+| Motivo do último reinício | Reinjetado no boot, a partir da RTC RAM |
+
+O motivo de não transcrever as mensagens é que elas têm natureza
+diferente das da serial. As mensagens de serial são material de
+diagnóstico: quem lê o log precisa saber o que cada uma significa, e por
+isso elas aparecem em tabela mais adiante. As ocorrências do histórico
+são lidas **dentro da página**, ao lado do estado atual e do "há quanto
+tempo" — o contexto que elas precisam já está na tela. Copiá-las para cá
+produziria uma segunda lista para manter em sincronia, e a lista que
+diverge primeiro é sempre a que ninguém lê.
+
+Quem for conferir documentação contra código neste canal deve comparar
+**por categoria**: uma ocorrência nova só é divergência se não couber em
+nenhuma das seis acima.
+
 ### Contadores que sobrevivem ao reinício
 
 O histórico vive em RAM comum, e o reinício o apaga. Isso deixava um
