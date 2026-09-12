@@ -248,7 +248,7 @@ sentinela parar de vigiar porque o servidor web dela travou o aparelho.
 | Verificação | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
 | Verificação | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
 | ESP32 | Firmware | A versão editada a mão e o momento da compilação. Ver "Carimbo de versão". |
-| ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício de 24 h, adiante. |
+| ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício periódico (24 h no padrão), adiante. |
 | ESP32 | Heap&nbsp;livre | Memória livre **neste instante**. |
 | ESP32 | Mínimo desde o boot | **O pior momento de memória livre, não o valor atual.** Ver abaixo. |
 | ESP32 | IP&nbsp;/&nbsp;MAC | Do próprio ESP32, lidos da pilha de rede — o que ele de fato está usando. |
@@ -365,15 +365,26 @@ meio dos outros.
 
 A cada 24 horas de funcionamento o aparelho se reinicia sozinho.
 
+**As 24 horas são o valor padrão, não uma constante da natureza.** Elas
+vêm de `REINICIO_PERIODICO_MS`, no `main.cpp`, e quem mudar aquela linha
+muda o intervalo. As duas mensagens que anunciam o reinício — a da serial
+e o motivo gravado — são **montadas a partir da constante**, então
+acompanham qualquer valor que ela tenha. Não existe "24h" escrito à mão no
+código. O teto é de 40 dias, travado por `static_assert`; a seção
+**Erro de compilação esperado** explica por quê.
+
+O resto desta seção fala em 24 h por ser o padrão, e o mesmo raciocínio
+vale proporcionalmente para outro valor.
+
 A checagem está no início de cada ciclo do `loop()`, não num temporizador
 independente. Na prática o reinício cai no **primeiro ciclo depois das
 24 h** — algo entre 24h00 e 24h05, porque com o alvo no ar cada ciclo
 dura 5 minutos. Não é um horário exato, e não precisa ser.
 
-A serial anuncia:
+A serial anuncia, com o intervalo vindo da constante:
 
 ```
-Reinicio periodico de higiene (24h de funcionamento).
+Reinicio periodico de higiene (1d 0h 0min de funcionamento).
 ```
 
 ### É defesa cega, não diagnóstico
@@ -418,8 +429,8 @@ janela, a detecção atrasa um ciclo.
 
 ### O efeito colateral
 
-**O tempo de funcionamento e o histórico na página nunca passam de
-24 horas.** Não há defeito nisso: o "Ligado há" mostra o tempo desde o
+**O tempo de funcionamento e o histórico na página nunca passam do
+intervalo de reinício — 24 horas, no padrão.** Não há defeito nisso: o "Ligado há" mostra o tempo desde o
 último reinício, e as ocorrências vivem em RAM comum, que o reinício
 apaga. Quem abrir a página esperando um histórico de semanas vai achar
 que algo se perdeu — não se perdeu, nunca esteve lá.
@@ -522,7 +533,7 @@ tendo apagado a memória onde essa informação estava.
 
 ```
 Reinicios desde a ultima queda de energia: 3
-Motivo do ultimo: reinicio periodico de higiene (24h)
+Motivo do ultimo: reinicio periodico de higiene (1d 0h 0min)
 ```
 
 **A RTC RAM não sobrevive a queda de energia, e essa é a semântica
@@ -545,7 +556,7 @@ Os motivos possíveis hoje são cinco:
 | `falha ao criar a sessao de ping` | `esp_ping_new_session()` recusou. |
 | `falha ao iniciar a sessao de ping` | `esp_ping_start()` recusou. |
 | `ping sem retorno dentro do prazo` | O callback do ping nunca veio. |
-| `reinicio periodico de higiene (24h)` | O reinício programado. Único sem defeito envolvido. |
+| `reinicio periodico de higiene (<tempo>)` | O reinício programado. Único sem defeito envolvido. |
 
 Todo reinício passa por uma única função, `reiniciar()`, que grava o
 motivo antes de chamar `ESP.restart()`. Não existe `ESP.restart()` solto
@@ -761,7 +772,7 @@ abaixo do carimbo de versão:
 === Sentinela Wake-on-LAN ===
 Firmware 1.0, compilado em Sep 11 2026 16:45:12
 Reinicios desde a ultima queda de energia: 3
-Motivo do ultimo: reinicio periodico de higiene (24h)
+Motivo do ultimo: reinicio periodico de higiene (1d 0h 0min)
 Alvo: servidor  192.168.X.Y  AA:BB:CC:DD:EE:FF
 ```
 
@@ -837,7 +848,7 @@ Reiniciando em 10s para tentar de novo...
 | `Pagina de status: http://<ip>` | Só no boot, **depois** de a rede existir. O endereço vem de `WiFi.localIP()`, então é o real nos dois modos. |
 | `Reinicios desde a ultima queda de energia: <n>` | Só no boot, e só se houve reinício. Vem da RTC RAM; zera quando falta energia. |
 | `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos cinco motivos da tabela da seção de histórico. |
-| `Reinicio periodico de higiene (24h de funcionamento).` | O reinício programado de 24 h. **Não é defeito** — é a defesa cega descrita na seção própria. Esperado uma vez por dia. |
+| `Reinicio periodico de higiene (<tempo> de funcionamento).` | O reinício programado. O `<tempo>` é montado a partir de `REINICIO_PERIODICO_MS`, então acompanha a constante. **Não é defeito** — é a defesa cega descrita na seção própria. Esperado uma vez por dia. |
 | `[erro] nenhum magic packet saiu. Problema de rede no ESP32.` | O `sendto()` falhou nas três tentativas. Não é o alvo: é a pilha de rede do próprio ESP32. Costuma vir junto de instabilidade de Wi-Fi. |
 
 As três abaixo são falhas do próprio ESP32 dentro da checagem de ping.
@@ -1069,7 +1080,7 @@ recuperação escolhido.
 - **Sem OTA.** Cada mudança exige cabo USB.
 - **Nada é gravado em disco.** Existe a página de status e existe o
   histórico de 20 ocorrências, mas os dois vivem em RAM: o reinício os
-  apaga, e o reinício de higiene acontece a cada 24 h. A única exceção é
+  apaga, e o reinício de higiene acontece a cada 24 h no padrão. A única exceção é
   o contador de reinícios e o motivo do último, que ficam em RTC RAM e
   sobrevivem ao reset por software — mas não a queda de energia. Não há
   flash, cartão SD nem envio para fora: histórico de semanas não existe,

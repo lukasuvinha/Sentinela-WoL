@@ -975,8 +975,31 @@ void loop() {
   // retentativa de 5 min. Condicionar so criaria um caminho em que o
   // aparelho degradado nunca se recupera justamente por estar ocupado.
   if (millis() > REINICIO_PERIODICO_MS) {
-    Serial.println("Reinicio periodico de higiene (24h de funcionamento).");
-    reiniciar("reinicio periodico de higiene (24h)");
+    // O intervalo sai da constante, nunca escrito a mao. Antes as duas
+    // mensagens traziam "24h" no literal, e mudar REINICIO_PERIODICO_MS
+    // fazia as duas mentirem sem emitir erro - conferido na placa com a
+    // constante em 3 min e os textos ainda dizendo 24h. O motivo e o pior
+    // caso dos dois: ele vai para a RTC RAM, de la para o historico e de
+    // la para a pagina de status, entao a mentira sobrevive ao reinicio.
+    //
+    // Reusa formatarDuracao() de proposito, em vez de formatar aqui: um
+    // segundo caminho de formatacao seria mais um lugar para divergir.
+    // O preco e a frase ficar "1d 0h 0min" em vez de "24h" - esquisito,
+    // e sempre verdadeiro.
+    //
+    // Os buffers: o teto do static_assert da constante e de 40 dias, e a
+    // maior duracao possivel abaixo dele ("39d 23h 59min") produz motivo
+    // de 45 caracteres, que cabe nos 48 de rtcMotivo.
+    char quanto[24];
+    formatarDuracao(quanto, sizeof(quanto), REINICIO_PERIODICO_MS);
+
+    Serial.print("Reinicio periodico de higiene (");
+    Serial.print(quanto);
+    Serial.println(" de funcionamento).");
+
+    char motivo[48];
+    snprintf(motivo, sizeof(motivo), "reinicio periodico de higiene (%s)", quanto);
+    reiniciar(motivo);
   }
 
   garantirWiFi();
