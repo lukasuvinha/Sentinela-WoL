@@ -635,8 +635,17 @@ Demais regras:
 ```bash
 cd /caminho/para/sentinela-wol
 cp src/secrets.example.h src/secrets.h   # se ainda nao existir
-$EDITOR src/secrets.h                     # preencher SSID e senha reais
+$EDITOR src/secrets.h                     # preencher os OITO campos
 ```
+
+São oito campos, não dois: as duas credenciais de Wi-Fi, os três do alvo
+e os três de endereço do próprio ESP32. A seção
+[Configuração](#configuração) traz cada um em tabela, com o que é e onde
+descobrir o valor.
+
+Preencher só o SSID e a senha não gera um firmware pela metade — o build
+para, com uma mensagem por campo que faltou. A lista completa está em
+[Erro de compilação esperado](#erro-de-compilação-esperado).
 
 ### 2. Conectar a placa
 
@@ -817,16 +826,37 @@ culpando o alvo por um defeito local. Ver `alvoResponde()`.
 
 ### Erro de compilação esperado
 
-Se as credenciais não estiverem utilizáveis, o build **falha de
-propósito**, antes de gerar firmware. São duas checagens por campo,
-porque pegam descuidos diferentes:
+Se algum campo do `secrets.h` não estiver utilizável, o build **falha de
+propósito**, antes de gerar firmware. São **quinze travas**, duas por
+campo de texto e duas por campo numérico — uma pega o descuido de não
+editar, outra o de editar errado. A máscara é a única com uma só, pelo
+motivo explicado na seção de configuração.
+
+As mensagens saem sem acento porque vêm do compilador, e são exatamente
+estas:
 
 | Situação | Mensagem |
 |---|---|
-| Copiou o template e não editou | `Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.` |
-| Idem, campo da senha | `Preencha SECRET_WIFI_PASSWORD em src/secrets.h antes de compilar.` |
+| Copiou o template e não editou o SSID | `Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.` |
 | Apagou o SSID e deixou `""` | `SECRET_WIFI_SSID esta vazio em src/secrets.h. Nao existe rede sem nome.` |
+| Idem, campo da senha | `Preencha SECRET_WIFI_PASSWORD em src/secrets.h antes de compilar.` |
 | Apagou a senha e deixou `""` | `SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.` |
+| Idem, nome do alvo | `Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.` |
+| Apagou o nome do alvo e deixou `""` | `SECRET_ALVO_NOME esta vazio em src/secrets.h.` |
+| MAC do alvo com número de bytes errado — cinco, sete | `SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.` |
+| MAC do alvo ainda no valor do template | `SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.` |
+| IP do alvo com número de octetos errado | `SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
+| IP do alvo ainda no valor do template | `SECRET_ALVO_IP ainda e o exemplo. Troque em src/secrets.h pelo IP real do alvo.` |
+| IP do ESP32 com número de octetos errado | `SECRET_ESP32_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
+| IP do ESP32 ainda no valor do template | `SECRET_ESP32_IP ainda e o exemplo. Escolha em src/secrets.h um IP livre, fora da faixa de DHCP do roteador.` |
+| Gateway com número de octetos errado | `SECRET_GATEWAY_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
+| Gateway ainda no valor do template | `SECRET_GATEWAY_IP ainda e o exemplo. Troque em src/secrets.h pelo IP do seu roteador.` |
+| Máscara com número de octetos errado | `SECRET_MASCARA_REDE precisa ter exatamente 4 octetos em src/secrets.h.` |
+
+Quem copia o template e não edita nada recebe sete delas de uma vez: as
+três de `Preencha` mais as quatro de `ainda e o exemplo`. As de
+quantidade e as de campo vazio não disparam nesse caso, porque o template
+tem a contagem certa de bytes e nenhum campo em branco.
 
 Isso é intencional: evita gravar uma placa com credencial inválida e só
 descobrir depois, olhando a serial — onde o sintoma seria um ciclo de
@@ -843,6 +873,24 @@ passava e produzia firmware com SSID e senha em branco.
 comentar o `static_assert` correspondente no `main.cpp` — há um
 comentário no lugar explicando. Vale lembrar que rede aberta é escolha
 ruim para um aparelho que fica ligado permanentemente.
+
+#### A décima sexta trava, de natureza diferente
+
+Existe mais um `static_assert` no `main.cpp`, e ele **não** tem relação
+com o `secrets.h`. Não é campo que o usuário preenche: é um teto de
+projeto sobre `REINICIO_PERIODICO_MS`, a constante do reinício de
+higiene. Só aparece para quem alterar aquele valor no código — quem
+apenas instala a sentinela nunca vai vê-lo.
+
+```
+REINICIO_PERIODICO_MS perto demais do estouro de millis() (~49,7 dias). Acima de ~40 dias a comparacao direta do loop() deixa de valer: troque por (millis() - referencia) > REINICIO_PERIODICO_MS, guardando a referencia do boot numa variavel.
+```
+
+O motivo está na seção do reinício periódico: a comparação do `loop()` é
+direta (`millis() > REINICIO_PERIODICO_MS`) e só vale porque a referência
+é o boot e 24 h está longe do estouro de ~49,7 dias. O teto de 40 dias
+existe para que aumentar a constante além disso pare o build, em vez de
+produzir um aparelho que reinicia na hora errada meses depois.
 
 ### 4. Verificar que o alvo acordou
 

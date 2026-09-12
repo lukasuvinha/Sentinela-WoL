@@ -234,7 +234,8 @@ constexpr uint8_t ESP32_EXEMPLO[]   = { 192, 168, 1, 197 };
 constexpr uint8_t GATEWAY_EXEMPLO[] = { 192, 168, 1, 1 };
 
 static_assert(!mesmoVetor(ESP32_CONFERENCIA, ESP32_EXEMPLO, 4),
-              "SECRET_ESP32_IP ainda e o exemplo. Troque em src/secrets.h.");
+              "SECRET_ESP32_IP ainda e o exemplo. Escolha em src/secrets.h um IP livre, "
+              "fora da faixa de DHCP do roteador.");
 static_assert(!mesmoVetor(GATEWAY_CONFERENCIA, GATEWAY_EXEMPLO, 4),
               "SECRET_GATEWAY_IP ainda e o exemplo. Troque em src/secrets.h pelo IP do seu roteador.");
 
