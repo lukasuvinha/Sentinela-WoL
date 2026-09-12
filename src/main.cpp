@@ -1,6 +1,6 @@
 /*
-  ESP32 - Sentinela de Wake-on-LAN
-  --------------------------------
+  ESP32 - Sentinela Wake-on-LAN
+  -----------------------------
   Compilado e gravado via PlatformIO no VS Code / VSCodium.
 
   Funcao do dispositivo: manter uma maquina da rede ligada.
@@ -728,7 +728,7 @@ void paginaStatus() {
   enviarHtml("<!DOCTYPE html><html lang='pt-br'><head><meta charset='utf-8'>"
          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta http-equiv='refresh' content='10'>"
-         "<title>Sentinela de Wake-on-LAN</title><style>"
+         "<title>Sentinela Wake-on-LAN</title><style>"
          "body{font-family:system-ui,sans-serif;margin:0;padding:16px;"
          "background:#12141a;color:#e6e6e6;line-height:1.5}"
          "h1{font-size:1.1rem;margin:0 0 4px}"
@@ -744,7 +744,7 @@ void paginaStatus() {
          "list-style:none}"
          ".t{color:#8a93a6;font-variant-numeric:tabular-nums}"
          ".nota{color:#6b7280;font-size:.75rem;margin-top:6px}"
-         "</style></head><body><h1>Sentinela de Wake-on-LAN</h1>");
+         "</style></head><body><h1>Sentinela Wake-on-LAN</h1>");
 
   // Estado atual e ha quanto tempo
   formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
@@ -847,7 +847,7 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println("=== Sentinela de Wake-on-LAN ===");
+  Serial.println("=== Sentinela Wake-on-LAN ===");
 
   // Carimbo de versao. __DATE__ e __TIME__ sao substituidos pelo
   // pre-processador no momento em que ESTE arquivo e compilado - e so

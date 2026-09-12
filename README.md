@@ -700,7 +700,7 @@ Nos exemplos abaixo o `SECRET_ALVO_NOME` está preenchido com
 Com o alvo já ligado, a serial mostra:
 
 ```
-=== Sentinela de Wake-on-LAN ===
+=== Sentinela Wake-on-LAN ===
 Firmware 1.0, compilado em Sep 11 2026 16:45:12
 Alvo: servidor  192.168.X.Y  AA:BB:CC:DD:EE:FF
 Intervalo de monitoramento: 5 min
@@ -730,7 +730,7 @@ Depois de um reinício, é só depois dele, aparecem mais duas linhas logo
 abaixo do carimbo de versão:
 
 ```
-=== Sentinela de Wake-on-LAN ===
+=== Sentinela Wake-on-LAN ===
 Firmware 1.0, compilado em Sep 11 2026 16:45:12
 Reinicios desde a ultima queda de energia: 3
 Motivo do ultimo: reinicio periodico de higiene (24h)
