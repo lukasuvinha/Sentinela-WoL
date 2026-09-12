@@ -30,7 +30,34 @@
 #include "lwip/ip_addr.h"
 #include "ping/ping_sock.h"
 
-// ================= CONFIGURACAO (edite so aqui) =================
+// ======================== CONFIGURACAO ==========================
+//
+// Esta secao NAO e o lugar de editar para instalar o aparelho em outra
+// rede. Tudo que e especifico da instalacao - credenciais de Wi-Fi,
+// nome/IP/MAC do alvo, endereco do proprio ESP32 - vive em
+// src/secrets.h, que fica fora do git. O que vem abaixo apenas CONSOME
+// esses valores, dando a eles um tipo e um nome utilizavel no resto do
+// arquivo.
+//
+// O que de fato mora aqui, e nao no secrets.h, sao os parametros de
+// COMPORTAMENTO: tempos, numero de repeticoes, tetos. Esses sao decisao
+// do projeto e nao dado de quem instalou - valem igual em qualquer rede,
+// e mudar um deles muda o que a sentinela faz, nao onde ela olha.
+//
+// Regra pratica para quem for mexer: se o valor muda de casa para casa,
+// o lugar dele e o secrets.h. Se ele descreve como a sentinela se
+// comporta, o lugar e aqui.
+// ================================================================
+
+// --- Identificacao do firmware ---
+// EDITADA A MAO a cada versao significativa. Nao ha nada automatico
+// atras disso: nem tag de git, nem numero de build. E deliberado - o
+// aparelho e gravado por USB, de um clone que pode estar em qualquer
+// ponto do historico, e um numero gerado automaticamente daria a
+// impressao de rastreabilidade que nao existe. Este numero diz "que
+// versao eu quis gravar"; o __DATE__/__TIME__ do banner diz "quando este
+// binario foi feito", que e o dado objetivo.
+const char* FIRMWARE_VERSAO = "1.0";
 
 // --- Wi-Fi ---
 // Credenciais vem de src/secrets.h (arquivo no .gitignore).
@@ -101,6 +128,22 @@ const int TENTATIVAS_RAPIDAS = 3;
 
 // Reinicio periodico de higiene. Ver o bloco no inicio do loop().
 const unsigned long REINICIO_PERIODICO_MS = 24UL * 60UL * 60UL * 1000UL;  // 24 h
+
+// O teste no loop() e "millis() > REINICIO_PERIODICO_MS", comparacao
+// direta. Ela so e valida porque a referencia e o boot, onde millis()
+// vale 0, e porque 24 h esta muito longe do estouro de ~49,7 dias do
+// unsigned long de 32 bits. Passado o estouro, millis() volta a zero e a
+// comparacao direta deixa de significar "ja se passaram N ms".
+//
+// O teto de 40 dias abaixo existe para que aumentar a constante nao
+// quebre isso em silencio: quem subir o valor alem dele para com erro de
+// compilacao, e nao com um aparelho que reinicia na hora errada meses
+// depois. Ver a ressalva no comentario de esperar().
+static_assert(REINICIO_PERIODICO_MS < 40UL * 24UL * 60UL * 60UL * 1000UL,
+              "REINICIO_PERIODICO_MS perto demais do estouro de millis() (~49,7 dias). "
+              "Acima de ~40 dias a comparacao direta do loop() deixa de valer: "
+              "troque por (millis() - referencia) > REINICIO_PERIODICO_MS, "
+              "guardando a referencia do boot numa variavel.");
 
 // --- Ping ---
 const uint32_t PINGS_POR_CHECAGEM = 3;      // considera online com 1 resposta
@@ -201,8 +244,21 @@ static_assert(!mesmoVetor(GATEWAY_CONFERENCIA, GATEWAY_EXEMPLO, 4),
 // obrigaria a inventar um valor "nao-exemplo" que provavelmente estaria
 // errado. So a quantidade de octetos e conferida.
 
+// Distingue a PRIMEIRA conexao de uma reconexao. Sem isso o boot
+// anunciava "Wi-Fi desconectado" e gravava "Wi-Fi caiu" no historico,
+// descrevendo uma queda que nunca houve - a mesma funcao serve os dois
+// casos, e ate aqui ela so sabia dizer um deles. Comeca falsa a cada
+// boot de proposito: depois de um reinicio, a conexao seguinte e mesmo
+// uma primeira conexao daquele ciclo de vida.
+bool jaConectouWiFi = false;
+
 WiFiUDP udp;
 WebServer server(80);
+
+// Prototipo. A definicao esta la embaixo, junto das outras funcoes do
+// servidor web, mas alvoResponde() e esperar() chamam atenderWeb() bem
+// antes disso no arquivo - e .cpp nao tem prototipagem automatica.
+void atenderWeb();
 
 enum EstadoAlvo { DESCONHECIDO, ONLINE, OFFLINE };
 EstadoAlvo estado = DESCONHECIDO;
@@ -343,15 +399,6 @@ static void aoFinalizarPing(esp_ping_handle_t hdl, void* args) {
   pingFinalizado = true;
 }
 
-// O WebServer so processa requisicao quando handleClient() e chamado.
-// Como o laco principal passa ate 5 minutos parado esperando, sem isso a
-// pagina responderia apenas nas frestas entre as esperas e pareceria
-// quebrada. Por isso esta funcao e chamada de dentro de cada laco que
-// dorme.
-void atenderWeb() {
-  server.handleClient();
-}
-
 // true = o alvo respondeu pelo menos um ICMP echo.
 // Uma unica perda de pacote nao derruba o diagnostico: sao
 // PINGS_POR_CHECAGEM tentativas e basta uma resposta.
@@ -454,8 +501,13 @@ bool alvoResponde() {
 void garantirWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
-  Serial.println("Wi-Fi desconectado. Reconectando...");
-  registrar("Wi-Fi caiu - reconectando");
+  if (jaConectouWiFi) {
+    Serial.println("Wi-Fi desconectado. Reconectando...");
+    registrar("Wi-Fi caiu - reconectando");
+  } else {
+    Serial.println("Conectando no Wi-Fi...");
+    registrar("Conectando no Wi-Fi");
+  }
 
   // Fecha o socket UDP antes de reconectar. O WiFiUDP reaproveita o
   // mesmo socket para sempre depois de criado (beginPacket retorna cedo
@@ -539,7 +591,12 @@ void garantirWiFi() {
   Serial.println();
   Serial.print("Wi-Fi OK. IP do ESP32: ");
   Serial.println(WiFi.localIP());
-  registrar("Wi-Fi reconectado");
+  if (jaConectouWiFi) {
+    registrar("Wi-Fi reconectado");
+  } else {
+    registrar("Wi-Fi conectado");
+  }
+  jaConectouWiFi = true;
 
   // O socket de escuta do servidor nao sobrevive a queda da interface -
   // mesmo motivo que ja obriga o udp.stop() logo acima. Sem este par
@@ -555,6 +612,16 @@ void garantirWiFi() {
 // na pratica a fazia parecer travada.
 // A subtracao de unsigned long trata o overflow de millis()
 // (~49 dias) corretamente - por isso nao se compara millis() > alvo.
+//
+// EXCECAO, e e a unica no arquivo: o reinicio periodico, no inicio do
+// loop(), compara millis() > REINICIO_PERIODICO_MS direto. Ali a
+// comparacao vale porque a referencia nao e um instante qualquer, e sim
+// o boot, onde millis() e exatamente 0 - a subtracao seria por zero e
+// nao mudaria nada. E vale tambem porque 24 h esta muito longe do
+// estouro: o aparelho reinicia e millis() recomeca do zero muito antes
+// de chegar perto dos ~49,7 dias. Fora essas duas condicoes juntas a
+// regra de cima continua valendo, e por isso ha um static_assert junto
+// da constante travando o valor bem abaixo do estouro.
 void esperar(unsigned long ms) {
   const unsigned long inicio = millis();
   while (millis() - inicio < ms) {
@@ -582,6 +649,15 @@ void imprimirMacAlvo() {
 // historico: nada de String nesta rota, que pode ser chamada muitas
 // vezes por minuto se alguem deixar a aba aberta.
 
+// O WebServer so processa requisicao quando handleClient() e chamado.
+// Como o laco principal passa ate 5 minutos parado esperando, sem isso a
+// pagina responderia apenas nas frestas entre as esperas e pareceria
+// quebrada. Por isso esta funcao e chamada de dentro de cada laco que
+// dorme.
+void atenderWeb() {
+  server.handleClient();
+}
+
 // Escreve "3d 4h 12min" em buf. Omite as unidades maiores quando zero.
 void formatarDuracao(char* buf, size_t tam, unsigned long ms) {
   unsigned long s = ms / 1000UL;
@@ -601,10 +677,14 @@ const char* nomeEstado() {
   }
 }
 
-// Envia um pedaco sem criar String. O overload (const char*, size_t) do
-// WebServer escreve direto no socket; a versao que recebe String alocaria
-// e liberaria um bloco a cada chamada.
-inline void enviar(const char* s) {
+// Envia um pedaco de HTML sem criar String. O overload (const char*,
+// size_t) do WebServer escreve direto no socket; a versao que recebe
+// String alocaria e liberaria um bloco a cada chamada.
+//
+// O nome traz o "Html" porque num arquivo cujo assunto principal e
+// disparar pacote de rede, uma funcao chamada so "enviar" ao lado de
+// enviarMagicPacket() se le errado.
+inline void enviarHtml(const char* s) {
   server.sendContent(s, strlen(s));
 }
 
@@ -628,10 +708,7 @@ void paginaStatus() {
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html; charset=utf-8", "");
 
-  // Sem JavaScript e sem recurso externo de proposito: a pagina precisa
-  // abrir mesmo com a internet fora, que e justamente quando alguem vai
-  // querer olhar o estado do servidor de casa. O meta refresh basta.
-  enviar("<!DOCTYPE html><html lang='pt-br'><head><meta charset='utf-8'>"
+  enviarHtml("<!DOCTYPE html><html lang='pt-br'><head><meta charset='utf-8'>"
          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta http-equiv='refresh' content='10'>"
          "<title>Sentinela de Wake-on-LAN</title><style>"
@@ -658,10 +735,10 @@ void paginaStatus() {
   snprintf(buf, sizeof(buf),
            "<div class='big %s'>%s</div><div class='t'>ha %s</div>",
            cor, nomeEstado(), t1);
-  enviar(buf);
+  enviarHtml(buf);
 
   // Verificacao
-  enviar("<h2>Verificacao</h2><table>");
+  enviarHtml("<h2>Verificacao</h2><table>");
   formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
   const unsigned long decorrido = agora - ultimaVerificacao;
   if (proximaEspera > decorrido) {
@@ -675,35 +752,47 @@ void paginaStatus() {
            "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
            "<tr><td>WoL desde o boot</td><td>%d</td></tr></table>",
            t1, t2, tentativasWol, totalWolDesdeBoot);
-  enviar(buf);
+  enviarHtml(buf);
 
   // ESP32
-  enviar("<h2>ESP32</h2><table>");
+  enviarHtml("<h2>ESP32</h2><table>");
+
+  // Mesma informacao do banner de boot, para quem so tem a pagina a mao.
+  // Vale a ressalva do setup(): __DATE__ e __TIME__ congelam no momento
+  // em que o main.cpp e compilado, e uma compilacao incremental que nao
+  // o recompile carrega o carimbo antigo para dentro do binario novo.
+  // Por isso o build de validacao do projeto e sempre do zero.
+  snprintf(buf, sizeof(buf),
+           "<tr><td>Firmware</td><td>%s<br><span class='t'>compilado em %s %s"
+           "</span></td></tr>",
+           FIRMWARE_VERSAO, __DATE__, __TIME__);
+  enviarHtml(buf);
+
   formatarDuracao(t1, sizeof(t1), agora);
   snprintf(buf, sizeof(buf),
            "<tr><td>Ligado ha</td><td>%s</td></tr>"
            "<tr><td>Heap livre</td><td>%u B</td></tr>"
            "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
            t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
-  enviar(buf);
+  enviarHtml(buf);
   snprintf(buf, sizeof(buf),
            "<tr><td>IP</td><td>%s</td></tr>"
            "<tr><td>MAC</td><td>%s</td></tr>",
            WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
-  enviar(buf);
+  enviarHtml(buf);
 
   if (rtcReinicios == 0) {
-    enviar("<tr><td>Reinicios</td><td>nenhum desde a ultima queda de "
-           "energia</td></tr></table>");
+    enviarHtml("<tr><td>Reinicios</td><td>nenhum desde a ultima queda de "
+               "energia</td></tr></table>");
   } else {
     snprintf(buf, sizeof(buf),
              "<tr><td>Reinicios</td><td>%u desde a ultima queda de energia"
              "<br>ultimo: %s</td></tr></table>",
              (unsigned)rtcReinicios, rtcMotivo);
-    enviar(buf);
+    enviarHtml(buf);
   }
-  enviar("<div class='nota'>O minimo e o pior momento de memoria livre "
-         "desde que o aparelho ligou.</div>");
+  enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
+             "desde que o aparelho ligou.</div>");
 
   // Alvo
   snprintf(buf, sizeof(buf),
@@ -713,12 +802,12 @@ void paginaStatus() {
            ALVO_NOME, ALVO_IP.toString().c_str(),
            ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
            ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
-  enviar(buf);
+  enviarHtml(buf);
 
   // Ocorrencias, da mais recente para a mais antiga
-  enviar("<h2>Ocorrencias</h2><ul>");
+  enviarHtml("<h2>Ocorrencias</h2><ul>");
   if (historicoTotal == 0) {
-    enviar("<li>nenhuma ainda</li>");
+    enviarHtml("<li>nenhuma ainda</li>");
   } else {
     for (int i = 0; i < historicoTotal; i++) {
       int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
@@ -726,10 +815,10 @@ void paginaStatus() {
       snprintf(buf, sizeof(buf),
                "<li><span class='t'>ha %s</span><br>%s</li>",
                t1, historico[idx].texto);
-      enviar(buf);
+      enviarHtml(buf);
     }
   }
-  enviar("</ul></body></html>");
+  enviarHtml("</ul></body></html>");
 
   server.sendContent("", 0);   // encerra o chunked
 }
@@ -742,6 +831,20 @@ void setup() {
 
   Serial.println();
   Serial.println("=== Sentinela de Wake-on-LAN ===");
+
+  // Carimbo de versao. __DATE__ e __TIME__ sao substituidos pelo
+  // pre-processador no momento em que ESTE arquivo e compilado - e so
+  // entao. Uma compilacao incremental que nao recompile o main.cpp deixa
+  // o carimbo antigo no binario novo, o que faria a placa mentir sobre a
+  // propria idade justamente quando se esta tentando descobrir qual
+  // firmware ela tem. Por isso o build de validacao do projeto e sempre
+  // do zero: e o que garante que este carimbo diz a verdade.
+  Serial.print("Firmware ");
+  Serial.print(FIRMWARE_VERSAO);
+  Serial.print(", compilado em ");
+  Serial.print(__DATE__);
+  Serial.print(" ");
+  Serial.println(__TIME__);
 
   // Le o que sobreviveu ao ultimo reinicio. Lixo de power-on nao passa
   // pela palavra magica, e ai a contagem recomeca - que e o certo: queda
@@ -773,10 +876,11 @@ void setup() {
   // MAC do proprio ESP32. Serve para criar reserva de DHCP no roteador e
   // para identificar o aparelho na lista de clientes - sem isso ele fica
   // como mais um dispositivo sem nome no meio dos outros.
+  //
+  // Funciona antes do WiFi.mode() abaixo: com o radio em WIFI_MODE_NULL o
+  // core le o MAC direto do efuse, em vez de perguntar ao driver.
   Serial.print("MAC do ESP32: ");
   Serial.println(WiFi.macAddress());
-  Serial.print("Pagina de status: http://");
-  Serial.println(ESP32_IP);
   Serial.println();
 
   // Nao gravar as credenciais na NVS. O padrao do core e persistent(true),
@@ -804,12 +908,35 @@ void setup() {
   // milissegundos escutando sem rota nenhuma.
   server.on("/", paginaStatus);
 
+  // O boot e registrado ANTES do garantirWiFi(), e nao depois, para o
+  // historico sair na ordem em que as coisas de fato aconteceram. Com o
+  // registro depois, a pagina de um aparelho recem-ligado mostrava o boot
+  // como evento mais recente, acima da conexao de Wi-Fi que na verdade
+  // veio dele - a lista e exibida do mais novo para o mais antigo, entao
+  // a ordem de gravacao e a ordem lida de baixo para cima.
+  registrar("Boot do ESP32");
+
   garantirWiFi();
 
   estadoDesde       = millis();
   ultimaVerificacao = millis();
-  registrar("Boot do ESP32");
 
+  // O endereco da pagina so e impresso aqui, depois da rede existir, e
+  // sai de WiFi.localIP() e nao da constante. Antes esta linha ficava la
+  // em cima, no bloco anterior a conexao, imprimindo SECRET_ESP32_IP:
+  // era verdade com o IP fixo ativo e mentira com ele comentado, porque
+  // anunciava um endereco em que a pagina nao responderia. localIP() vale
+  // nos dois modos.
+  Serial.print("Pagina de status: http://");
+  Serial.println(WiFi.localIP());
+
+  // Segunda chamada de proposito - garantirWiFi() ja subiu o servidor no
+  // fim, e no boot ele sempre passa por aquele caminho. Nao custa nada:
+  // WebServer::begin() comeca fechando o que estiver aberto, entao o
+  // efeito e fechar e reabrir o mesmo socket de escuta, sem vazar
+  // descritor. Fica como rede de seguranca: se algum dia o garantirWiFi()
+  // mudar e deixar de subir o servidor, a pagina continua respondendo, e
+  // a falha nao aparece meses depois no dia em que alguem precisar dela.
   server.begin();
 }
 

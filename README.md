@@ -11,11 +11,13 @@ subir. Serve uma pagina de status HTTP para consulta pelo navegador.
 Nao depende de servidor, servico externo ou nuvem: a decisao inteira
 acontece no proprio aparelho, dentro da rede local.
 
-O alvo e definido por tres campos no `src/secrets.h` — nome, IP e MAC.
-Trocar os tres adapta a sentinela para qualquer maquina, sem alterar
-codigo. Na instalacao que originou o projeto, o alvo e um notebook
-reaproveitado rodando Ubuntu Server como servidor de homelab; os exemplos
-deste README usam esse caso.
+Toda a configuracao vive em `src/secrets.h`, um arquivo de **oito
+campos** que nao vai para o git. Tres deles descrevem o alvo — nome, IP e
+MAC — e trocar esses tres aponta a sentinela para outra maquina da mesma
+rede sem alterar codigo; os outros cinco descrevem a rede Wi-Fi e o
+endereco do proprio ESP32. Na instalacao que originou o projeto, o alvo e
+um notebook reaproveitado rodando Ubuntu Server como servidor de homelab;
+os exemplos deste README usam esse caso.
 
 ```
         ┌──────────────────────────────────────────────┐
@@ -99,9 +101,9 @@ O que cada arquivo do `src/` faz:
 
 | Arquivo | Papel |
 |---|---|
-| `main.cpp` | Firmware. Le tudo do `secrets.h`: credenciais de Wi-Fi e os tres campos do alvo (`SECRET_ALVO_NOME`, `SECRET_ALVO_MAC`, `SECRET_ALVO_IP`). |
+| `main.cpp` | Firmware. Le do `secrets.h` os **oito** campos da instalacao: as duas credenciais de Wi-Fi, os tres do alvo (`SECRET_ALVO_NOME`, `SECRET_ALVO_MAC`, `SECRET_ALVO_IP`) e os tres de endereco do proprio ESP32 (`SECRET_ESP32_IP`, `SECRET_GATEWAY_IP`, `SECRET_MASCARA_REDE`). |
 | `secrets.example.h` | Template publicavel. Contem os placeholders `PREENCHER_*`, nunca valores reais. Serve de referencia para quem clonar o repo. |
-| `secrets.h` | Dados reais: rede Wi-Fi e alvo. Esta no `.gitignore`. Se nao existir, criar com `cp src/secrets.example.h src/secrets.h`. |
+| `secrets.h` | Dados reais: rede Wi-Fi, alvo e endereco do proprio ESP32. Esta no `.gitignore`. Se nao existir, criar com `cp src/secrets.example.h src/secrets.h`. |
 
 ---
 
@@ -191,6 +193,379 @@ ligar, o firmware manda um WoL a mais sem necessidade. Isso e inofensivo
 
 Fixado em `255.255.255.255` (limited broadcast). Nao depende da faixa de
 IP da rede local — trocar de roteador ou provedor nao exige mexer aqui.
+
+---
+
+## Pagina de status
+
+O firmware sobe um servidor HTTP na porta 80. Com o `SECRET_ESP32_IP`
+preenchido como `192.168.X.Z`, a pagina responde em:
+
+```
+http://192.168.X.Z/
+```
+
+O endereco tambem aparece na serial no boot, na linha
+`Pagina de status: http://`.
+
+E preciso estar **na mesma rede local** do ESP32. Nao ha acesso de fora:
+o aparelho nao publica nada na internet, nao usa nuvem e nao abre tunel
+nenhum.
+
+### Somente leitura
+
+A pagina nao tem botao, formulario nem link de acao. Nao da para forcar
+um Wake-on-LAN, reiniciar o ESP32, mudar o intervalo ou alterar
+configuracao alguma por ela. A unica rota registrada e `/`, e tudo que
+ela faz e montar HTML a partir de variaveis em memoria. O que muda
+comportamento esta no `secrets.h` e nas constantes do `main.cpp` — ou
+seja, exige recompilar e regravar pela USB.
+
+### Nao exponha na internet
+
+**Sem redirecionamento de porta no roteador, sem UPnP, sem proxy reverso
+publico.**
+
+O motivo nao e a informacao que a pagina mostra. Quem ja esta na LAN
+descobre IP e MAC de qualquer aparelho com um `arp -a`, e a pagina nao
+revela senha nenhuma.
+
+O motivo e outro: **um servidor web de dispositivo embarcado nao e feito
+para aguentar trafego hostil.** Sao alguns KB de codigo num
+microcontrolador de 320 KB de RAM, sem limite de taxa, sem timeout
+agressivo, sem defesa contra requisicao malformada e sem nada que
+sobreviva a uma varredura automatizada — e a internet varre qualquer
+porta 80 aberta em questao de horas. O risco aqui nao e vazar dado: e a
+sentinela parar de vigiar porque o servidor web dela travou o aparelho.
+
+### O que ela mostra
+
+| Bloco | Campo | O que e |
+|---|---|---|
+| topo | Estado e "ha ..." | `ONLINE`, `OFFLINE` ou `verificando`, e ha quanto tempo esta assim. Conta desde a ultima **transicao**, nao desde o boot. |
+| Verificacao | Ultima | Ha quanto tempo foi o ultimo ping. |
+| Verificacao | Proxima em | Quanto falta para a proxima. Mostra `agora` quando o ciclo ja deveria ter acontecido — o aparelho esta no meio de uma checagem. |
+| Verificacao | WoL desde a ultima subida | Magic packets enviados desde a ultima vez que o alvo respondeu. Zera quando ele sobe. |
+| Verificacao | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Nao zera. |
+| ESP32 | Firmware | A versao editada a mao e o momento da compilacao. Ver "Carimbo de versao". |
+| ESP32 | Ligado ha | Tempo desde o ultimo boot. Ver a ressalva do reinicio de 24 h, adiante. |
+| ESP32 | Heap livre | Memoria livre **neste instante**. |
+| ESP32 | Minimo desde o boot | **O pior momento de memoria livre, nao o valor atual.** Ver abaixo. |
+| ESP32 | IP / MAC | Do proprio ESP32, lidos da pilha de rede — o que ele de fato esta usando. |
+| ESP32 | Reinicios | Quantos desde a ultima queda de energia, e o motivo do ultimo. |
+| Alvo | IP / MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado e o que se pensa que e. |
+| Ocorrencias | lista | Ate 20 eventos, do mais recente para o mais antigo. |
+
+**"Minimo desde o boot" merece atencao** porque e facil ler errado. Nao e
+a leitura atual: e o menor valor que o heap livre ja atingiu desde que o
+aparelho ligou (`ESP.getMinFreeHeap()`). Ele so desce, nunca sobe. E ele
+que responde a pergunta que importa — "em algum momento chegou perto do
+fim?". O "Heap livre" da linha de cima pode estar confortavel agora e ter
+havido um aperto ha seis horas; so o minimo mostra isso.
+
+### Atualizacao automatica
+
+A pagina se recarrega sozinha a cada 10 segundos, por
+`<meta http-equiv="refresh">`. **Nao ha JavaScript e nao ha recurso
+externo** — nenhuma fonte, folha de estilo ou biblioteca vinda de CDN.
+
+Isso e deliberado: a pagina precisa abrir com a internet fora, que e
+exatamente quando alguem vai querer olhar o estado do servidor de casa.
+Uma pagina que dependesse de `<script src="https://...">` ficaria em
+branco justamente na hora util.
+
+O HTML tambem e enviado em blocos (chunked), montado num buffer fixo de
+320 bytes, nunca numa `String`. Com refresh de 10 s sao ~8.600
+requisicoes por dia; montar a pagina inteira em heap a cada uma daria
+dezenas de milhares de alocacoes diarias no aparelho que o resto do
+projeto trabalha para manter sem fragmentacao.
+
+---
+
+## IP fixo do ESP32
+
+O aparelho assume um endereco fixo em vez de pedir um por DHCP. Sem isso
+o IP muda sem aviso e a pagina de status "some" justamente quando alguem
+precisa dela.
+
+Tres campos do `secrets.h` definem isso:
+
+| Campo | Exemplo | Papel |
+|---|---|---|
+| `SECRET_ESP32_IP` | `192, 168, X, Z` | O endereco que o ESP32 assume. |
+| `SECRET_GATEWAY_IP` | `192, 168, X, 1` | O roteador. Serve de gateway e tambem de DNS. |
+| `SECRET_MASCARA_REDE` | `255, 255, 255, 0` | Mascara da rede local. |
+
+A configuracao e aplicada dentro de `garantirWiFi()`, e nao so no
+`setup()`. Isso e de proposito: assim vale tambem em toda reconexao, e o
+endereco nao depende da ordem das chamadas na inicializacao.
+
+### A armadilha: a faixa de DHCP
+
+**O IP escolhido precisa estar FORA da faixa que o roteador distribui por
+DHCP.**
+
+Se estiver dentro dela, o roteador nao tem como saber que aquele endereco
+esta ocupado — o ESP32 nunca pediu nada a ele — e mais cedo ou mais tarde
+entrega o mesmo endereco a outro aparelho. Os dois passam a responder
+pelo mesmo IP e somem da rede **de forma intermitente**: as vezes
+funciona, as vezes nao, dependendo de quem respondeu ARP por ultimo. E
+dos sintomas mais chatos de diagnosticar, porque nao aparece erro em
+lugar nenhum — nem no ESP32, nem no roteador, nem no outro aparelho.
+
+Roteador domestico tipico distribui de `.100` a `.200`, e ai qualquer
+coisa abaixo de `.100` serve. Alguns distribuem de `.2` a `.254`: nesse
+caso nao sobra faixa livre, e e preciso encurtar o intervalo do DHCP no
+painel antes de fixar qualquer endereco.
+
+**Como conferir o endereco do roteador:**
+
+```bash
+ip route | grep default        # o IP do roteador vem depois de "via"
+```
+
+**Como conferir a faixa de DHCP:** so no painel do roteador. Abrir o IP
+do gateway no navegador e procurar por "DHCP", "Servidor DHCP" ou "LAN
+Settings". O nome do campo varia entre fabricantes: "faixa de
+enderecos", "pool", "start/end address".
+
+### Voltar para DHCP
+
+Comentar uma unica linha no `main.cpp`, dentro do bloco delimitado por
+`IP FIXO - inicio do bloco` / `fim do bloco`, em `garantirWiFi()`:
+
+```cpp
+// WiFi.config(ESP32_IP, GATEWAY_IP, MASCARA_REDE, GATEWAY_IP);
+```
+
+O aparelho passa a pegar endereco do roteador. O IP obtido aparece na
+serial em duas linhas — `Wi-Fi OK. IP do ESP32:` e
+`Pagina de status: http://` — que nesse modo continuam corretas, porque
+as duas saem de `WiFi.localIP()` depois de a conexao existir, e nao da
+constante. A pagina de status continua funcionando, so que num endereco
+que pode mudar sem aviso.
+
+### Reserva de DHCP, a alternativa
+
+Quem preferir centralizar o controle no roteador pode deixar o ESP32 em
+DHCP e criar uma **reserva** la, amarrando o endereco ao MAC do aparelho.
+Para isso o firmware imprime o proprio MAC no boot:
+
+```
+MAC do ESP32: 3C:61:05:XX:XX:XX
+```
+
+Serve tambem para identificar o aparelho na lista de clientes do
+roteador, onde sem isso ele fica como mais um dispositivo sem nome no
+meio dos outros.
+
+---
+
+## Reinicio periodico de higiene
+
+A cada 24 horas de funcionamento o aparelho se reinicia sozinho.
+
+A checagem esta no inicio de cada ciclo do `loop()`, nao num temporizador
+independente. Na pratica o reinicio cai no **primeiro ciclo depois das
+24 h** — algo entre 24h00 e 24h05, porque com o alvo no ar cada ciclo
+dura 5 minutos. Nao e um horario exato, e nao precisa ser.
+
+A serial anuncia:
+
+```
+Reinicio periodico de higiene (24h de funcionamento).
+```
+
+### E defesa cega, nao diagnostico
+
+Isto nao corrige um problema conhecido. Existe contra degradacao que o
+codigo **nao tem como perceber sozinho**.
+
+Dois casos motivam. O primeiro e fragmentacao de heap: o total livre pode
+continuar alto enquanto ja nao existe nenhum bloco contiguo grande o
+suficiente, e nao ha como checar isso de dentro com confianca.
+
+O segundo e mais grave — a pilha de Wi-Fi entrar num estado em que
+reporta `WL_CONNECTED` sem trafego real passar. Nesse estado nada falha
+visivelmente: `garantirWiFi()` ve a conexao como boa e nao reconecta, o
+ping falha honestamente porque nao ha rede, a sentinela conclui "alvo
+desligado" e passa a mandar Wake-on-LAN para sempre num servidor que
+esta ligado o tempo todo. Nenhuma das tres mensagens de erro da checagem
+aparece, porque nenhuma delas descreve esse caso. O aparelho continua
+"funcionando", so que cego — e nao ha como distinguir isso de um alvo
+realmente fora do ar sem sair do proprio ESP32.
+
+### Nao ha condicao de estado, de proposito
+
+O reinicio acontece mesmo com o alvo offline no meio das tentativas de
+Wake-on-LAN. Isso foi decidido, nao esquecido.
+
+Condicionar o reinicio a "so quando estiver tudo calmo" criaria
+exatamente o caminho que a defesa existe para cobrir: um aparelho
+degradado que nunca se recupera justamente por estar ocupado. No cenario
+do Wi-Fi fantasma acima, a sentinela ficaria permanentemente em OFFLINE
+mandando WoL — portanto nunca "calma" — e nunca reiniciaria.
+
+O custo de reiniciar no meio de uma sequencia e pequeno: depois do boot o
+primeiro ciclo pinga em ~30 s, contra um intervalo de retentativa de
+5 min.
+
+### O custo
+
+Cerca de **30 segundos de cegueira por dia** — boot, conexao de Wi-Fi e
+primeiro ping. Sao 0,03% do tempo. Se o alvo cair exatamente nessa
+janela, a deteccao atrasa um ciclo.
+
+### O efeito colateral
+
+**O tempo de funcionamento e o historico na pagina nunca passam de
+24 horas.** Nao ha defeito nisso: o "Ligado ha" mostra o tempo desde o
+ultimo reinicio, e as ocorrencias vivem em RAM comum, que o reinicio
+apaga. Quem abrir a pagina esperando um historico de semanas vai achar
+que algo se perdeu — nao se perdeu, nunca esteve la.
+
+O contador de reinicios e o motivo do ultimo sao a excecao: sobrevivem,
+pelo mecanismo da proxima secao.
+
+---
+
+## Historico de ocorrencias e contadores de reinicio
+
+A pagina de status mostra ate **20 ocorrencias**, da mais recente para a
+mais antiga, com "ha quanto tempo" ao lado de cada uma.
+
+### Vetor de tamanho fixo, e por que
+
+O historico e um vetor circular de 20 posicoes, com texto de 56 bytes
+cada, reservado uma vez na inicializacao e imutavel dali em diante. Sem
+`String`, sem `new`, sem `malloc`, sem `std::vector`. Quando a 21a
+ocorrencia chega, ela sobrescreve a mais antiga.
+
+A razao e a mesma que guia o resto do firmware: este aparelho fica meses
+ligado registrando eventos. Texto de tamanho dinamico neste caminho
+significaria alocar e liberar blocos de tamanhos variados milhares de
+vezes, que e a receita de fragmentacao de heap — exatamente o problema
+que o projeto passou uma revisao inteira descartando. Um log bonito nao
+paga reintroduzi-lo pela porta dos fundos.
+
+O preco do tamanho fixo e o truncamento: uma mensagem que passe de 56
+bytes e cortada em silencio pelo `snprintf`. Com nome de maquina curto
+isso nao acontece.
+
+### O criterio: so ocorrencias, nunca rotina
+
+Entra no historico o que e **evento**: boot, conexao de Wi-Fi, queda e
+volta do Wi-Fi, mudanca de estado do alvo, envio de Wake-on-LAN, falha de
+envio, e o motivo de um reinicio anterior. Nao entra o tique de rotina —
+o `continua online` de cada ciclo.
+
+A primeira conexao e a reconexao sao registradas com textos diferentes
+(`Conectando no Wi-Fi` e `Wi-Fi caiu - reconectando`). A distincao
+importa: ate a versao anterior o boot gravava uma queda de Wi-Fi que
+nunca tinha acontecido, e como o boot so era registrado depois, um
+aparelho recem-ligado exibia os eventos em ordem enganosa — o boot
+aparecia como o mais recente dos tres, acima da conexao que tinha
+partido dele.
+
+Isso e essencial, nao economia de memoria. Com o alvo no ar, um ciclo
+acontece a cada 5 minutos. Se cada um gravasse uma linha, as 20 posicoes
+se esgotariam em **100 minutos**, e qualquer ocorrencia real seria
+empurrada para fora antes de alguem ter chance de ver. O historico existe
+para responder "o que aconteceu de diferente", e uma lista de vinte
+`continua online` nao responde nada.
+
+### Contadores que sobrevivem ao reinicio
+
+O historico vive em RAM comum, e o reinicio o apaga. Isso deixava um
+buraco justamente no que mais importa: os eventos que **disparam** um
+reinicio eram os unicos que nunca chegavam a aparecer na pagina, porque o
+proprio reinicio que eles anunciavam os destruia.
+
+Duas coisas foram para a **RTC RAM**, uma regiao pequena que o reset por
+software nao zera:
+
+- quantos reinicios ja houve;
+- o motivo do ultimo, em texto.
+
+No boot o firmware le as duas, imprime na serial e **reinjeta o motivo no
+historico**, como uma ocorrencia `Reiniciou: <motivo>`. E por isso que a
+pagina consegue dizer POR QUE o aparelho reiniciou, mesmo o reinicio
+tendo apagado a memoria onde essa informacao estava.
+
+```
+Reinicios desde a ultima queda de energia: 3
+Motivo do ultimo: reinicio periodico de higiene (24h)
+```
+
+**A RTC RAM nao sobrevive a queda de energia, e essa e a semantica
+desejada.** Falta de luz nao e sintoma de defeito do aparelho: se o
+contador continuasse somando entre apagoes, passaria a medir a
+confiabilidade da rede eletrica em vez da saude do firmware. Tirar o
+aparelho da tomada zera a contagem de proposito — dai o "desde a ultima
+queda de energia" no texto.
+
+Uma palavra magica gravada junto distingue dado nosso de lixo: depois de
+um power-on a regiao vem com qualquer conteudo, e sem essa checagem o
+firmware anunciaria um numero aleatorio de reinicios com um motivo
+ilegivel.
+
+Os motivos possiveis hoje sao cinco:
+
+| Motivo | Origem |
+|---|---|
+| `Wi-Fi nao conectou dentro do prazo` | 30 s sem conectar, em `garantirWiFi()`. |
+| `falha ao criar a sessao de ping` | `esp_ping_new_session()` recusou. |
+| `falha ao iniciar a sessao de ping` | `esp_ping_start()` recusou. |
+| `ping sem retorno dentro do prazo` | O callback do ping nunca veio. |
+| `reinicio periodico de higiene (24h)` | O reinicio programado. Unico sem defeito envolvido. |
+
+Todo reinicio passa por uma unica funcao, `reiniciar()`, que grava o
+motivo antes de chamar `ESP.restart()`. Nao existe `ESP.restart()` solto
+no arquivo — logo, nao existe reinicio sem motivo registrado.
+
+---
+
+## Carimbo de versao
+
+O firmware se identifica em dois lugares, com a mesma informacao: na
+serial, logo abaixo do cabecalho de boot, e na pagina de status, na
+primeira linha do bloco ESP32.
+
+```
+Firmware 1.0, compilado em Sep 11 2026 16:45:12
+```
+
+Sao dois dados de natureza diferente:
+
+| Parte | De onde vem | O que significa |
+|---|---|---|
+| `1.0` | `FIRMWARE_VERSAO`, no `main.cpp` | **Editada a mao** a cada versao significativa. Diz que versao se quis gravar. |
+| `Sep 11 2026 16:45:12` | `__DATE__` e `__TIME__` | Substituidos pelo pre-processador. Diz quando este binario foi feito. |
+
+Nao ha nada automatico atras do numero de versao — nem tag de git, nem
+contador de build — e isso e deliberado. O aparelho e gravado por USB, de
+um clone que pode estar em qualquer ponto do historico, as vezes com
+alteracao nao commitada; um numero gerado automaticamente daria
+impressao de rastreabilidade que nao existe. O numero diz a intencao, e o
+carimbo de compilacao e o dado objetivo ao lado dele.
+
+**A ressalva do `__DATE__`/`__TIME__`.** Os dois congelam no momento em
+que o **`main.cpp`** e compilado, e so entao. Numa compilacao incremental
+que nao recompile esse arquivo — mexeu so no `secrets.h`, por exemplo — o
+carimbo antigo vai inteiro para dentro do binario novo, e a placa passa a
+mentir sobre a propria idade justamente quando se esta tentando descobrir
+qual firmware ela tem.
+
+Por isso o build de validacao do projeto e **sempre do zero**:
+
+```bash
+rm -rf .pio/build && pio run
+```
+
+Para que serve na pratica: com o aparelho ja na tomada ha meses, abrir a
+pagina e comparar o carimbo com o do ultimo build responde em dois
+segundos a pergunta "esta placa tem a versao que eu acho que tem?" — sem
+desmontar nada e sem cabo USB.
 
 ---
 
@@ -308,7 +683,7 @@ Algumas placas exigem segurar o botao **BOOT** durante o inicio do
 upload (quando aparece `Connecting....`), soltando depois.
 
 Referencia de tamanho de um build limpo (esp32dev, 4 MB flash):
-RAM 13.8%, Flash 56.4%.
+RAM 14,3% (46.776 B), Flash 60,1% (787.193 B).
 
 Nos exemplos abaixo o `SECRET_ALVO_NOME` esta preenchido com
 `servidor`, e MAC e IP aparecem como placeholders.
@@ -317,14 +692,45 @@ Com o alvo ja ligado, a serial mostra:
 
 ```
 === Sentinela de Wake-on-LAN ===
-Alvo do ping: 192.168.X.Y
-MAC para o WoL: AA:BB:CC:DD:EE:FF
+Firmware 1.0, compilado em Sep 11 2026 16:45:12
+Alvo: servidor  192.168.X.Y  AA:BB:CC:DD:EE:FF
 Intervalo de monitoramento: 5 min
+MAC do ESP32: 3C:61:05:XX:XX:XX
 
+Conectando no Wi-Fi...
+.....
 Wi-Fi OK. IP do ESP32: 192.168.X.Z
+Pagina de status: http://192.168.X.Z
 Verificando o servidor (heap livre: 268412 bytes)... ONLINE.
 Verificando o servidor (heap livre: 268408 bytes)... continua online.
 ```
+
+Duas coisas a notar na ordem desse bloco:
+
+- **`Conectando no Wi-Fi...` e diferente de `Wi-Fi desconectado.
+  Reconectando...`.** A mesma funcao (`garantirWiFi()`) trata a primeira
+  conexao e as reconexoes, mas anuncia cada caso com o texto que
+  corresponde. No boot so aparece o primeiro; o segundo significa que uma
+  conexao que existia caiu. Os pontos que vem depois sao o progresso da
+  tentativa.
+- **`Pagina de status:` so sai depois de `Wi-Fi OK`**, e imprime o
+  endereco que a interface de fato assumiu (`WiFi.localIP()`). Vale nos
+  dois modos, IP fixo ou DHCP.
+
+Depois de um reinicio, e so depois dele, aparecem mais duas linhas logo
+abaixo do carimbo de versao:
+
+```
+=== Sentinela de Wake-on-LAN ===
+Firmware 1.0, compilado em Sep 11 2026 16:45:12
+Reinicios desde a ultima queda de energia: 3
+Motivo do ultimo: reinicio periodico de higiene (24h)
+Alvo: servidor  192.168.X.Y  AA:BB:CC:DD:EE:FF
+```
+
+Elas somem quando o aparelho e desligado da tomada — a contagem vive em
+RTC RAM, que a queda de energia zera. Ver a secao de historico e
+contadores.
 
 O **heap livre** aparece em todo ciclo como termometro barato, nao
 porque haja suspeita em aberto.
@@ -386,7 +792,15 @@ Reiniciando em 10s para tentar de novo...
 
 | Mensagem | Significado |
 |---|---|
-| `Wi-Fi desconectado. Reconectando...` | Normal e transitorio. Toda rede cai de vez em quando; o firmware reconecta sozinho. Preocupante so se aparecer a cada ciclo. |
+| `Firmware <versao>, compilado em <data> <hora>` | So no boot. Ver a secao "Carimbo de versao". |
+| `Conectando no Wi-Fi...` | Primeira conexao do ciclo de vida atual — boot ou reinicio. Nada caiu. |
+| `Wi-Fi desconectado. Reconectando...` | Uma conexao que **existia** caiu. Normal e transitorio: toda rede cai de vez em quando, e o firmware reconecta sozinho. Preocupante so se aparecer a cada ciclo. |
+| `Wi-Fi OK. IP do ESP32: <ip>` | Conexao estabelecida. Com o IP fixo ativo, este endereco e o do `SECRET_ESP32_IP`; se divergir, o `WiFi.config()` nao esta valendo. |
+| `MAC do ESP32: <mac>` | So no boot. O MAC do proprio aparelho, para reserva de DHCP no roteador e para identifica-lo na lista de clientes. |
+| `Pagina de status: http://<ip>` | So no boot, **depois** de a rede existir. O endereco vem de `WiFi.localIP()`, entao e o real nos dois modos. |
+| `Reinicios desde a ultima queda de energia: <n>` | So no boot, e so se houve reinicio. Vem da RTC RAM; zera quando falta energia. |
+| `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos cinco motivos da tabela da secao de historico. |
+| `Reinicio periodico de higiene (24h de funcionamento).` | O reinicio programado de 24 h. **Nao e defeito** — e a defesa cega descrita na secao propria. Esperado uma vez por dia. |
 | `[erro] nenhum magic packet saiu. Problema de rede no ESP32.` | O `sendto()` falhou nas tres tentativas. Nao e o alvo: e a pilha de rede do proprio ESP32. Costuma vir junto de instabilidade de Wi-Fi. |
 
 As tres abaixo sao falhas do proprio ESP32 dentro da checagem de ping.
@@ -577,12 +991,24 @@ recuperacao escolhido.
 - **Sem teste automatizado.** O firmware e simples o suficiente para
   validar por serial monitor.
 - **Sem OTA.** Cada mudanca exige cabo USB.
-- **Sem historico.** O estado so aparece na serial, ao vivo. Nada e
-  gravado: desconectou o monitor, perdeu o log.
-- **Nao distingue "desligado" de "inalcancavel".** Se o alvo estiver
-  ligado mas isolado (cabo solto, switch fora, firewall bloqueando ICMP),
-  a sentinela le como desligado e manda WoL. Sao pacotes inofensivos, mas
-  o diagnostico na serial fica enganoso.
+- **Nada e gravado em disco.** Existe a pagina de status e existe o
+  historico de 20 ocorrencias, mas os dois vivem em RAM: o reinicio os
+  apaga, e o reinicio de higiene acontece a cada 24 h. A unica excecao e
+  o contador de reinicios e o motivo do ultimo, que ficam em RTC RAM e
+  sobrevivem ao reset por software — mas nao a queda de energia. Nao ha
+  flash, cartao SD nem envio para fora: historico de semanas nao existe,
+  e nao ha como reconstruir depois.
+- **Nao distingue "desligado" de "inalcancavel por rede".** Se o alvo
+  estiver ligado mas isolado — cabo solto, switch fora, firewall
+  descartando ICMP, isolamento de clientes no Wi-Fi — a sentinela le como
+  desligado e manda WoL. Sao pacotes inofensivos, mas o diagnostico fica
+  invertido. Continua sendo um gap real: nao ha como fecha-lo so com
+  ping.
+- **Falha interna da checagem nao cai mais nesse caso.** Isto deixou de
+  ser verdade para as tres falhas do proprio ESP32 dentro de
+  `alvoResponde()`: elas nao saem mais como "alvo caido", reiniciam o
+  aparelho com o motivo gravado. A ambiguidade que restou e so a de
+  rede, do item acima.
 - **Credencial em texto claro no binario.** Inerente ao Arduino. Ver a
   secao Seguranca.
 - **Sem alarme.** Se o alvo nunca subir, o ESP32 tenta para sempre em
@@ -597,7 +1023,7 @@ recuperacao escolhido.
 
 ## Verificacoes ja feitas
 
-- Compila limpo para `esp32dev` (RAM 13.8%, Flash 56.4%), sem warnings.
+- Compila limpo para `esp32dev` (RAM 14,3%, Flash 60,1%), sem warnings.
 - Estrutura do magic packet validada byte a byte contra a spec do
   Wake-on-LAN: 102 bytes, 6x `0xFF` + 16 repeticoes do MAC, sem lacuna
   nem estouro de buffer.
@@ -634,3 +1060,43 @@ recuperacao escolhido.
   `secrets.example.h` continuou publicado.
 - Simulacao de publicacao com credencial real preenchida: nada de
   sensivel entra no `git add -A`.
+- **Duvida de vazamento na sessao de ping: encerrada.** O fonte do
+  `esp_ping` e publico (`components/lwip/apps/ping/ping_sock.c`, no
+  repositorio [espressif/esp-idf](https://github.com/espressif/esp-idf))
+  e foi lido. O `esp_ping_delete_session()` apenas marca a sessao; quem
+  devolve memoria, buffer do pacote ICMP, socket e a propria task e a
+  tarefa interna do ping, em ate ~1 s. Contra 5 min ate a verificacao
+  seguinte, a margem e de 300 para 1. A mesma leitura confirmou que os
+  callbacks nao definidos (`on_ping_success`, `on_ping_timeout`) passam
+  por checagem de ponteiro nulo antes da chamada indireta — o que antes
+  so se sabia por desmontagem do `.obj` do toolchain.
+- **Travas de compilacao dos oito campos do `secrets.h`**, testadas uma a
+  uma com o build falhando de proposito em cada caso: template intocado,
+  SSID vazio, senha vazia, nome do alvo nao editado, MAC de exemplo, IP
+  do alvo de exemplo, IP do ESP32 de exemplo, gateway de exemplo, e
+  mascara com numero errado de octetos. A mascara `255, 255, 255, 0` foi
+  testada em separado para confirmar que ela **compila** — sem esse
+  teste, a ausencia de trava de valor nela seria afirmacao nao
+  verificada.
+- **Caminho unico de reinicio.** Nao existe `ESP.restart()` solto no
+  `main.cpp`: os cinco motivos passam por `reiniciar()`, que grava o
+  texto em RTC RAM antes de reiniciar. Conferido por varredura no
+  arquivo.
+- **Nenhuma constante orfa.** Os 30 nomes de constante e variavel global
+  do `main.cpp` foram conferidos um a um; todos tem pelo menos um uso
+  alem da declaracao.
+- Mensagens da serial extraidas do `main.cpp` e conferidas contra este
+  README nos dois sentidos: mensagem no codigo que faltasse aqui, e
+  mensagem daqui que nao existisse mais no codigo.
+- **Trava do `REINICIO_PERIODICO_MS` testada por regressao.** Subindo a
+  constante para 45 dias, o build para com a mensagem do `static_assert`
+  explicando que a comparacao direta do `loop()` deixa de valer acima de
+  ~40 dias e o que usar no lugar. Com 24 h, compila.
+- **Avisos realmente ativos.** O "zero avisos sob `-Wall -Wextra`" foi
+  confirmado com um teste de controle: uma variavel nao usada plantada de
+  proposito no `loop()` produz `-Wunused-variable`. Sem esse controle,
+  "zero avisos" poderia ser apenas flag desligada.
+- `WiFi.macAddress()` funciona antes do `WiFi.mode()`: com o radio em
+  `WIFI_MODE_NULL` o core le o MAC direto do efuse em vez de perguntar ao
+  driver. Conferido no fonte do core, e e o que permite a linha
+  `MAC do ESP32:` sair no bloco de boot, antes da rede existir.
