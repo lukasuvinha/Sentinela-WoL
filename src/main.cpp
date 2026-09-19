@@ -786,17 +786,39 @@ void paginaStatus() {
   enviarHtml(buf);
 
   formatarDuracao(t1, sizeof(t1), agora);
-  snprintf(buf, sizeof(buf),
-           "<tr><td>Ligado ha</td><td>%s</td></tr>"
-           "<tr><td>Heap livre</td><td>%u B</td></tr>"
-           "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
-           t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  snprintf(buf, sizeof(buf), "<tr><td>Ligado ha</td><td>%s</td></tr>", t1);
   enviarHtml(buf);
-  snprintf(buf, sizeof(buf),
-           "<tr><td>IP</td><td>%s</td></tr>"
-           "<tr><td>MAC</td><td>%s</td></tr>",
-           WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  snprintf(buf, sizeof(buf), "<tr><td>IP</td><td>%s</td></tr>",
+           WiFi.localIP().toString().c_str());
   enviarHtml(buf);
+
+  // ---- OCULTO NA PAGINA - inicio ----------------------------------
+  // Tres linhas sairam daqui a pedido do dono: heap livre, minimo desde
+  // o boot, e o MAC do proprio ESP32. Nao foram apagadas porque sao uteis
+  // em diagnostico; so nao pertencem a tela do dia a dia, que existe para
+  // responder "o servidor esta no ar?" e nao para medir memoria.
+  //
+  // O heap NAO se perdeu: ele continua saindo na serial a cada ciclo, em
+  // "Verificando o <alvo> (heap livre: N bytes)...". O MAC do ESP32
+  // continua no banner de boot, que e onde alguem procura quando vai criar
+  // reserva de DHCP no roteador.
+  //
+  // PARA REATIVAR: troque os dois snprintf acima por este bloco.
+  //
+  //   snprintf(buf, sizeof(buf),
+  //            "<tr><td>Ligado ha</td><td>%s</td></tr>"
+  //            "<tr><td>Heap livre</td><td>%u B</td></tr>"
+  //            "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
+  //            t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  //   enviarHtml(buf);
+  //   snprintf(buf, sizeof(buf),
+  //            "<tr><td>IP</td><td>%s</td></tr>"
+  //            "<tr><td>MAC</td><td>%s</td></tr>",
+  //            WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  //   enviarHtml(buf);
+  //
+  // E reative tambem a nota do rodape, logo abaixo dos reinicios.
+  // ---- OCULTO NA PAGINA - fim -------------------------------------
 
   if (rtcReinicios == 0) {
     enviarHtml("<tr><td>Reinicios</td><td>nenhum desde a ultima queda de "
@@ -808,8 +830,11 @@ void paginaStatus() {
              (unsigned)rtcReinicios, rtcMotivo);
     enviarHtml(buf);
   }
-  enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
-             "desde que o aparelho ligou.</div>");
+  // A nota do rodape explicava o "minimo desde o boot", que saiu da pagina.
+  // Sem a linha que ela explica, viraria legenda de figura ausente.
+  // PARA REATIVAR, junto com o bloco acima:
+  //   enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
+  //              "desde que o aparelho ligou.</div>");
 
   // Alvo
   snprintf(buf, sizeof(buf),

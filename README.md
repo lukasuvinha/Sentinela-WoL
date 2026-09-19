@@ -249,19 +249,26 @@ sentinela parar de vigiar porque o servidor web dela travou o aparelho.
 | Verificação | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
 | ESP32 | Firmware | A versão editada a mão e o momento da compilação. Ver "Carimbo de versão". |
 | ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício periódico (24 h no padrão), adiante. |
-| ESP32 | Heap&nbsp;livre | Memória livre **neste instante**. |
-| ESP32 | Mínimo desde o boot | **O pior momento de memória livre, não o valor atual.** Ver abaixo. |
-| ESP32 | IP&nbsp;/&nbsp;MAC | Do próprio ESP32, lidos da pilha de rede — o que ele de fato está usando. |
+| ESP32 | IP | Do próprio ESP32, lido da pilha de rede — o que ele de fato está usando. |
 | ESP32 | Reinícios | Quantos desde a última queda de energia, e o motivo do último. |
 | Alvo | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
 | Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. |
 
-**"Mínimo desde o boot" merece atenção** porque é fácil ler errado. Não é
-a leitura atual: é o menor valor que o heap livre já atingiu desde que o
-aparelho ligou (`ESP.getMinFreeHeap()`). Ele só desce, nunca sobe. É ele
-que responde a pergunta que importa — "em algum momento chegou perto do
-fim?". O "Heap livre" da linha de cima pode estar confortável agora e ter
-havido um aperto há seis horas; só o mínimo mostra isso.
+**Três campos foram retirados desta tela**: o heap livre, o mínimo desde
+o boot, e o MAC do próprio ESP32. A página existe para responder "o
+servidor está no ar?", e medida de memória não pertence a essa pergunta.
+
+Nada disso se perdeu de vista:
+
+- o **heap livre** continua saindo na serial a cada ciclo, em
+  `Verificando o <alvo> (heap livre: N bytes)...`, que é onde ele serve —
+  acompanhado ao longo do tempo, não espiado num instante;
+- o **MAC do ESP32** continua no banner de boot, que é onde alguém procura
+  quando vai criar reserva de DHCP no roteador.
+
+No `main.cpp` o código dos três está **comentado, não apagado**, junto de
+uma nota de como reativar. O mínimo desde o boot (`ESP.getMinFreeHeap()`)
+é o único que deixa de aparecer em qualquer canal.
 
 ### Atualização automática
 
