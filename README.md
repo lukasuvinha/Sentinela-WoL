@@ -559,7 +559,7 @@ Os motivos possíveis hoje são cinco:
 
 | Motivo | Origem |
 |---|---|
-| `Wi-Fi nao conectou dentro do prazo` | 30 s sem conectar, em `garantirWiFi()`. |
+| `Wi-Fi nao conectou dentro do prazo` | 3 min sem conectar, em `garantirWiFi()`. |
 | `falha ao criar a sessao de ping` | `esp_ping_new_session()` recusou. |
 | `falha ao iniciar a sessao de ping` | `esp_ping_start()` recusou. |
 | `ping sem retorno dentro do prazo` | O callback do ping nunca veio. |
@@ -833,7 +833,7 @@ Subiu depois de 1 tentativa(s) de Wake-on-LAN.
 -->
 
 
-Se o Wi-Fi não conectar em 30 segundos, o firmware desiste, explica o
+Se o Wi-Fi não conectar em **3 minutos**, o firmware desiste, explica o
 motivo provável e reinicia sozinho para tentar de novo:
 
 ```
@@ -1025,7 +1025,7 @@ patamar.
 ### 5. Wi-Fi
 
 Rede 2.4 GHz e sinal suficiente no local onde o ESP32 vai ficar. O
-firmware avisa explicitamente se não conectar em 30 s.
+firmware avisa explicitamente se não conectar em 3 min.
 
 ### Já verificado, não precisa observar
 
@@ -1057,8 +1057,8 @@ mais tarde.
 ### Retentar o Wi-Fi sem reiniciar
 
 **Propósito.** Se o roteador ficar fora do ar por muito tempo, o
-`ESP.restart()` do `garantirWiFi()` vira um ciclo de reboot a cada ~40 s
-(30 s de timeout + 10 s de espera), indefinidamente. A alternativa seria
+`ESP.restart()` do `garantirWiFi()` vira um ciclo de reboot a cada
+~3min10s (3 min de timeout + 10 s de espera), indefinidamente. A alternativa seria
 insistir no Wi-Fi no próprio laço, sem nunca reiniciar.
 
 **Solução proposta.** Trocar `println` + `delay` + `ESP.restart()` por um

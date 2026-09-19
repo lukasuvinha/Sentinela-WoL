@@ -115,7 +115,21 @@ const int WOL_PORT   = 9;   // porta padrao do Wake-on-LAN
 const int REPETICOES = 3;   // manda o pacote 3x (UDP nao garante entrega)
 
 // --- Tempos ---
-const unsigned long WIFI_TIMEOUT_MS = 30000;        // 30 s para conectar no Wi-Fi
+// Quanto insistir no Wi-Fi antes de desistir e reiniciar.
+//
+// Eram 30 s, e a medicao mostrou que era pouco. Em dois episodios
+// capturados o roteador entrou num estado em que nenhum aparelho
+// conseguia associar - o PC da bancada ficou 66 s fora numa das medicoes,
+// e o AP levou minutos para voltar. Com 30 s de timeout mais 10 s de
+// espera, cada volta custava ~40 s, e uma unica indisponibilidade do
+// roteador produzia varios reinicios seguidos.
+//
+// Reiniciar nao ajuda quando quem esta fora e o AP: so troca uma espera
+// por outra, e ainda apaga o historico que vive na RAM. O reinicio existe
+// para o caso do stack de Wi-Fi DESTE aparelho travar, que e raro - e 3
+// min continuam curtos o bastante para cobrir esse caso.
+const unsigned long WIFI_TIMEOUT_MS = 3UL * 60UL * 1000UL;  // 3 min
+
 
 const unsigned long INTERVALO_MONITORAMENTO_MS = 5UL * 60UL * 1000UL;  // 5 min
 const unsigned long ESPERA_POS_WOL_MS          = 90UL * 1000UL;        // 90 s
@@ -570,8 +584,8 @@ void garantirWiFi() {
       // ----------------------------------------------------------------
       // PROPOSITO
       //   Se o roteador ficar fora do ar por muito tempo, o ESP.restart()
-      //   acima vira um ciclo de reboot a cada ~40s (30s de timeout + 10s
-      //   de espera), indefinidamente. A alternativa seria insistir no
+      //   acima vira um ciclo de reboot a cada ~3min10s (3 min de timeout
+      //   + 10 s de espera), indefinidamente. A alternativa seria insistir no
       //   Wi-Fi aqui mesmo, sem nunca reiniciar.
       //
       // SOLUCAO PROPOSTA
@@ -608,10 +622,23 @@ void garantirWiFi() {
   Serial.println();
   Serial.print("Wi-Fi OK. IP do ESP32: ");
   Serial.println(WiFi.localIP());
+  // Quanto tempo levou entra no historico de proposito, e e a compensacao
+  // por ter subido o timeout para 3 min. Antes, quando o AP ficava em mau
+  // estado, o aparelho reiniciava e o motivo gravado na RTC RAM
+  // ("Wi-Fi nao conectou dentro do prazo") era o unico sinal de que algo
+  // errado tinha acontecido - foi ele que revelou a causa da investigacao
+  // de setembro. Com 3 min o aparelho passa a aguentar o episodio sem
+  // reiniciar, e aquele sinal desapareceria.
+  //
+  // A duracao substitui o sinal com vantagem: um valor alto diz que a rede
+  // demorou a aceitar o aparelho, e como agora ele NAO reinicia, o registro
+  // sobrevive na RAM em vez de ser apagado pelo proprio reinicio que o
+  // anunciava. Reconexao normal marca 0 ou 1 s e nao polui.
+  const unsigned long levou = (millis() - inicio) / 1000UL;
   if (jaConectouWiFi) {
-    registrar("Wi-Fi reconectado");
+    registrar("Wi-Fi reconectado apos %lu s", levou);
   } else {
-    registrar("Wi-Fi conectado");
+    registrar("Wi-Fi conectado apos %lu s", levou);
   }
   jaConectouWiFi = true;
 
@@ -929,7 +956,7 @@ void setup() {
   // o que faz cada WiFi.begin() ter a flash como destino de escrita. Aqui
   // isso nao serve para nada: SSID e senha ja vem compilados no firmware,
   // via secrets.h. Desligar elimina desgaste de flash no cenario em que o
-  // roteador fica fora do ar e o dispositivo reinicia a cada ~40s
+  // roteador fica fora do ar e o dispositivo reinicia a cada ~3min10s
   // indefinidamente (ver garantirWiFi). De quebra, deixa de existir uma
   // segunda copia da senha fora do binario.
   //
