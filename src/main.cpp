@@ -130,6 +130,11 @@ const int REPETICOES = 3;   // manda o pacote 3x (UDP nao garante entrega)
 // min continuam curtos o bastante para cobrir esse caso.
 const unsigned long WIFI_TIMEOUT_MS = 3UL * 60UL * 1000UL;  // 3 min
 
+// Espera entre anunciar a falha e reiniciar. Constante, e nao numero solto
+// no meio da frase: a mensagem de serial e montada a partir dela, porque
+// este projeto ja foi mordido por valor escrito a mao (ver o "24h" do
+// reinicio periodico).
+const unsigned long ESPERA_ANTES_DE_REINICIAR_MS = 10UL * 1000UL;  // 10 s
 
 const unsigned long INTERVALO_MONITORAMENTO_MS = 5UL * 60UL * 1000UL;  // 5 min
 const unsigned long ESPERA_POS_WOL_MS          = 90UL * 1000UL;        // 90 s
@@ -573,9 +578,11 @@ void garantirWiFi() {
       Serial.println("FALHA: nao conectou no Wi-Fi dentro do timeout.");
       Serial.println("Confira SSID/senha em src/secrets.h.");
       Serial.println("Confira tambem se a rede e 2.4 GHz (o ESP32 nao fala 5 GHz).");
-      Serial.println("Reiniciando em 10s para tentar de novo...");
+      Serial.print("Reiniciando em ");
+      Serial.print(ESPERA_ANTES_DE_REINICIAR_MS / 1000UL);
+      Serial.println("s para tentar de novo...");
       Serial.flush();
-      delay(10000);
+      delay(ESPERA_ANTES_DE_REINICIAR_MS);
       // dispositivo sem operador: tem que se recuperar sozinho
       reiniciar("Wi-Fi nao conectou dentro do prazo");
 
