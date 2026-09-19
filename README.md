@@ -240,7 +240,7 @@ sentinela parar de vigiar porque o servidor web dela travou o aparelho.
 
 ### O que ela mostra
 
-A página tem **três blocos, nesta ordem**, e a ordem tem uma razão: a
+Os blocos da página vêm **nesta ordem**, e a ordem tem uma razão: a
 máquina vigiada é a pergunta que traz alguém até ali; as ocorrências
 explicam o que aconteceu com ela; o aparelho vem por último, porque quem
 olha o próprio firmware não está com pressa.
@@ -530,8 +530,8 @@ para responder "o que aconteceu de diferente", e uma lista de vinte
 
 ### As categorias de ocorrência
 
-O firmware registra seis categorias de evento. A lista abaixo é **das
-categorias**, não das mensagens: o texto exato de cada ocorrência não é
+O firmware registra as categorias de evento da tabela abaixo. A lista é
+**das categorias**, não das mensagens: o texto exato de cada ocorrência não é
 transcrito aqui de propósito.
 
 | Categoria | Quando entra |
@@ -591,7 +591,12 @@ um power-on a região vem com qualquer conteúdo, e sem essa checagem o
 firmware anunciaria um número aleatório de reinícios com um motivo
 ilegível.
 
-Os motivos possíveis hoje são cinco:
+Os motivos possíveis são os da tabela abaixo.
+
+<!-- Não escreva a quantidade aqui nem em nenhuma outra frase deste
+     arquivo. Número contado à mão ao lado da tabela que o contém é o
+     mesmo padrão do "24h" e do "10s": diverge na próxima linha que
+     alguém acrescentar, e ninguém percebe. A tabela é a fonte. -->
 
 | Motivo | Origem |
 |---|---|
@@ -890,7 +895,7 @@ Reiniciando em 10s para tentar de novo...
 | `MAC do ESP32: <mac>` | Só no boot. O MAC do próprio aparelho, para reserva de DHCP no roteador e para identificá-lo na lista de clientes. |
 | `Pagina de status: http://<ip>` | Só no boot, **depois** de a rede existir. O endereço vem de `WiFi.localIP()`, então é o real nos dois modos. |
 | `Reinicios desde a ultima queda de energia: <n>` | Só no boot, e só se houve reinício. Vem da RTC RAM; zera quando falta energia. |
-| `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos cinco motivos da tabela da seção de histórico. |
+| `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos motivos da tabela da seção de histórico. |
 | `Reinicio periodico de higiene (<tempo> de funcionamento).` | O reinício programado. O `<tempo>` é montado a partir de `REINICIO_PERIODICO_MS`, então acompanha a constante. **Não é defeito** — é a defesa cega descrita na seção própria. Esperado uma vez por dia. |
 | `[erro] nenhum magic packet saiu. Problema de rede no ESP32.` | O `sendto()` falhou nas três tentativas. Não é o alvo: é a pilha de rede do próprio ESP32. Costuma vir junto de instabilidade de Wi-Fi. |
 
@@ -909,10 +914,10 @@ culpando o alvo por um defeito local. Ver `alvoResponde()`.
 ### Erro de compilação esperado
 
 Se algum campo do `secrets.h` não estiver utilizável, o build **falha de
-propósito**, antes de gerar firmware. São **dezesseis travas**, duas por
-campo de texto e duas por campo numérico — uma pega o descuido de não
-editar, outra o de editar errado. A máscara é a única com uma só, pelo
-motivo explicado na seção de configuração.
+propósito**, antes de gerar firmware. O padrão é **duas por campo** —
+uma pega o descuido de não editar, outra o de editar errado. A máscara
+tem só a segunda, pelo motivo explicado na seção de configuração, e o
+nome do alvo tem uma terceira, de tamanho, explicada adiante.
 
 As mensagens saem sem acento porque vêm do compilador, e são exatamente
 estas:
@@ -987,9 +992,9 @@ mensagem.
 mudar o `HISTORICO_TEXTO`, um segundo `static_assert` para o build e manda
 refazê-la.
 
-#### As cinco travas de natureza diferente
+#### As travas de natureza diferente
 
-Existem mais cinco `static_assert` no `main.cpp`, e nenhum deles tem
+Existem outros `static_assert` no `main.cpp`, e nenhum deles tem
 relação com o `secrets.h`. Não são campos que o usuário preenche: são
 tetos de projeto, e **só aparecem para quem alterar aqueles valores no
 código** — quem apenas instala a sentinela nunca vai vê-los.
@@ -1293,7 +1298,7 @@ recuperação escolhido.
   teste, a ausência de trava de valor nela seria afirmação não
   verificada.
 - **Caminho único de reinício.** Não existe `ESP.restart()` solto no
-  `main.cpp`: os cinco motivos passam por `reiniciar()`, que grava o
+  `main.cpp`: todos os motivos passam por `reiniciar()`, que grava o
   texto em RTC RAM antes de reiniciar. Conferido por varredura no
   arquivo.
 - **Nenhuma constante órfã.** Os 30 nomes de constante e variável global
