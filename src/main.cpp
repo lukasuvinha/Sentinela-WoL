@@ -842,18 +842,88 @@ inline void enviarHtml(const char* s) {
   server.sendContent(s, strlen(s));
 }
 
-void paginaStatus() {
-  const unsigned long agora = millis();
-  // Buffer unico, reaproveitado a cada pedaco. 320 e folgado de proposito:
-  // o snprintf trunca em SILENCIO, e o corte cai no meio de uma tag HTML,
-  // quebrando a pagina sem nenhum sinal de erro. Alem disso ALVO_NOME vem
-  // do secrets.h, onde nada limita o tamanho - um nome de maquina comprido
-  // consome a margem sozinho.
+// Um cartao por maquina vigiada. Esta funcao existe separada de proposito:
+// hoje ela e chamada UMA vez, porque so existe um alvo, mas e exatamente o
+// trecho que vira um laco quando o projeto passar a acordar varias. Tudo
+// que e especifico de uma maquina esta aqui dentro - nome, estado, ha
+// quanto tempo, endereco e os contadores dela - e nada do aparelho.
+//
+// Quando houver N alvos, o corpo nao muda: muda a origem dos dados, que
+// deixa de ser variavel global e passa a ser parametro.
+void emitirBlocoMaquina(unsigned long agora) {
+  // Mesma regra do buffer de paginaStatus: o snprintf trunca em silencio e
+  // o corte cai dentro de uma tag.
   //
-  // Quem acrescentar linhas na tabela abaixo precisa reconferir este valor:
-  // o maior snprintf daqui ja usa ~176 bytes so de HTML literal.
+  // O maior snprintf DESTA funcao e o cabecalho do cartao: 96 bytes de HTML
+  // literal, mais ate 18 do ALVO_NOME (teto garantido pelo static_assert
+  // do nome), 3 da classe de cor, 11 de "verificando" e 20 da duracao.
+  // Pior caso ~148 bytes.
+  //
+  // A tabela vem em tres snprintf e nao em um: as seis linhas juntas
+  // passariam de 320 bytes. Nao junte.
   char buf[320];
   char t1[32], t2[32];
+
+  // Nome em cima, em cor neutra; o estado colorido logo abaixo. Juntar os
+  // dois na mesma linha pintava o nome da maquina de verde, o que lia como
+  // se o nome fizesse parte do estado.
+  formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
+  const char* cor = (estado == ONLINE) ? "on" : (estado == OFFLINE ? "off" : "unk");
+  snprintf(buf, sizeof(buf),
+           "<div class='maq'><div class='nome'>%s</div>"
+           "<div class='big %s'>%s</div><div class='t'>ha %s</div><table>",
+           ALVO_NOME, cor, nomeEstado(), t1);
+  enviarHtml(buf);
+
+  // Identificacao da maquina: os valores compilados, vindos do secrets.h.
+  snprintf(buf, sizeof(buf),
+           "<tr><td>IP</td><td>%s</td></tr>"
+           "<tr><td>MAC</td><td>%02X:%02X:%02X:%02X:%02X:%02X</td></tr>",
+           ALVO_IP.toString().c_str(),
+           ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
+           ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
+  enviarHtml(buf);
+
+  // Ritmo da vigilancia desta maquina.
+  formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
+  const unsigned long decorrido = agora - ultimaVerificacao;
+  if (proximaEspera > decorrido) {
+    formatarDuracao(t2, sizeof(t2), proximaEspera - decorrido);
+  } else {
+    snprintf(t2, sizeof(t2), "agora");
+  }
+  snprintf(buf, sizeof(buf),
+           "<tr><td>Ultima verificacao</td><td>ha %s</td></tr>"
+           "<tr><td>Proxima em</td><td>%s</td></tr>",
+           t1, t2);
+  enviarHtml(buf);
+
+  // Os contadores de Wake-on-LAN sao desta maquina, nao do aparelho.
+  // Tres snprintf e nao um: as seis linhas juntas passam de 320 bytes, e o
+  // truncamento do snprintf e silencioso e cai no meio de uma tag.
+  snprintf(buf, sizeof(buf),
+           "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
+           "<tr><td>WoL desde o boot</td><td>%d</td></tr></table></div>",
+           tentativasWol, totalWolDesdeBoot);
+  enviarHtml(buf);
+}
+
+void paginaStatus() {
+  const unsigned long agora = millis();
+  // Buffer unico, reaproveitado a cada pedaco. O snprintf trunca em
+  // SILENCIO, e o corte cai no meio de uma tag HTML, quebrando a pagina sem
+  // nenhum sinal de erro - por isso a folga e grande de proposito.
+  //
+  // O maior snprintf DESTA funcao e o dos reinicios: 88 bytes de HTML
+  // literal, mais ate 10 do contador e ate 47 do rtcMotivo, que e um
+  // char[48]. Pior caso ~145 bytes, menos da metade do buffer.
+  // (O segundo maior e a linha de ocorrencia: 39 literais + 20 de duracao
+  // + ate 55 do texto do historico = ~114.)
+  //
+  // Os pedacos de uma maquina nao estao aqui: foram para
+  // emitirBlocoMaquina(), que tem buffer proprio e conta propria.
+  char buf[320];
+  char t1[32];
 
   // Transmissao em blocos (chunked): a pagina nunca existe inteira na
   // memoria. Montar tudo numa String antes de enviar pediria ~4 KB de
@@ -866,13 +936,33 @@ void paginaStatus() {
          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta http-equiv='refresh' content='10'>"
          "<title>Sentinela Wake-on-LAN</title><style>"
-         "body{font-family:system-ui,sans-serif;margin:0;padding:16px;"
-         "background:#12141a;color:#e6e6e6;line-height:1.5}"
+         "body{font-family:system-ui,sans-serif;margin:0 auto;padding:16px;"
+         "max-width:1200px;background:#12141a;color:#e6e6e6;line-height:1.5}"
+         // A grade quer largura; texto corrido nao. Os blocos que nao sao
+         // cartao ficam num comprimento de linha legivel.
+         "body>h2,body>ul,body>table{max-width:680px}"
          "h1{font-size:1.1rem;margin:0 0 4px}"
          "h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;"
          "color:#8a93a6;margin:22px 0 6px;font-weight:600}"
-         ".big{font-size:1.7rem;font-weight:700;margin:6px 0 0}"
+         ".big{font-size:1.7rem;font-weight:700;margin:1px 0 0;line-height:1.2}"
          ".on{color:#4ade80}.off{color:#f87171}.unk{color:#facc15}"
+         // O MAXIMO DA COLUNA E FIXO (340px) E NAO 1fr, DE PROPOSITO.
+         // Com 1fr o maximo vira "cresca para ocupar o que sobrar", e um
+         // cartao sozinho se estica pela largura toda do monitor - foi o
+         // que deixou a pagina feia no PC. Com teto proprio, o cartao tem
+         // o mesmo tamanho havendo uma maquina ou dez, e o justify-content
+         // centraliza o conjunto em vez de encostar num canto.
+         //
+         // O min(100%,300px) do minimo evita estouro horizontal em tela
+         // mais estreita que 300px: ali o cartao passa a valer 100%.
+         // Nao troque por 1fr.
+         ".maqs{display:grid;gap:14px;margin:12px 0 20px;justify-content:center;"
+         "grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),340px))}"
+         ".maq{background:#171a21;border:1px solid #262a35;border-radius:10px;"
+         "padding:14px 16px}"
+         ".nome{font-size:1.1rem;font-weight:600;color:#e6e6e6}"
+         ".maq table{margin-top:12px}"
+         ".maq tr:last-child td{border-bottom:none}"
          "table{width:100%;border-collapse:collapse;font-size:.9rem}"
          "td{padding:6px 0;border-bottom:1px solid #262a35;vertical-align:top}"
          "td:first-child{color:#8a93a6;width:48%}"
@@ -883,32 +973,52 @@ void paginaStatus() {
          ".nota{color:#6b7280;font-size:.75rem;margin-top:6px}"
          "</style></head><body><h1>Sentinela Wake-on-LAN</h1>");
 
-  // Estado atual e ha quanto tempo
-  formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
-  const char* cor = (estado == ONLINE) ? "on" : (estado == OFFLINE ? "off" : "unk");
-  snprintf(buf, sizeof(buf),
-           "<div class='big %s'>%s</div><div class='t'>ha %s</div>",
-           cor, nomeEstado(), t1);
-  enviarHtml(buf);
+  // ORDEM DA PAGINA, e ela tem uma razao:
+  //   1. as maquinas vigiadas, que e a pergunta que traz alguem aqui;
+  //   2. as ocorrencias, que explicam o que aconteceu com elas;
+  //   3. o aparelho, por ultimo - quem olha o firmware e a si mesmo nao
+  //      esta com pressa.
+  // Com varias maquinas, so o passo 1 cresce, e cresce por repeticao.
+  // O contentor da grade fica AQUI, e nao dentro de emitirBlocoMaquina():
+  // ele e de todas as maquinas, nao de uma. Com varias, o laco vai aqui
+  // dentro e o CSS faz o resto - empilhado no celular, lado a lado no PC,
+  // sem media query e sem JavaScript:
+  //
+  //   repeat(auto-fit, minmax(min(100%, 300px), 340px))
+  //
+  // O MAXIMO DA COLUNA E FIXO (340px) E NAO 1fr, E ISSO E DELIBERADO.
+  // Com 1fr o maximo vira "cresca para ocupar o que sobrar", e um cartao
+  // sozinho se estica pela largura inteira do monitor - foi exatamente o
+  // que deixou a pagina feia no PC. Com teto proprio, o cartao tem o mesmo
+  // tamanho havendo uma maquina ou dez, e o justify-content centraliza o
+  // conjunto em vez de encosta-lo num canto.
+  //
+  // Trocar por 1fr "para simplificar" traz o problema de volta. O
+  // min(100%, 300px) do minimo tambem nao e enfeite: sem ele, tela mais
+  // estreita que 300px ganha rolagem horizontal.
+  enviarHtml("<div class='maqs'>");
+  emitirBlocoMaquina(agora);
+  enviarHtml("</div>");
 
-  // Verificacao
-  enviarHtml("<h2>Verificacao</h2><table>");
-  formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
-  const unsigned long decorrido = agora - ultimaVerificacao;
-  if (proximaEspera > decorrido) {
-    formatarDuracao(t2, sizeof(t2), proximaEspera - decorrido);
+  // Ocorrencias, da mais recente para a mais antiga. Vale para todas as
+  // maquinas: quando houver mais de uma, o texto de cada ocorrencia ja
+  // carrega o nome (ver registrar()).
+  enviarHtml("<h2>Ocorrencias</h2><ul>");
+  if (historicoTotal == 0) {
+    enviarHtml("<li>nenhuma ainda</li>");
   } else {
-    snprintf(t2, sizeof(t2), "agora");
+    for (int i = 0; i < historicoTotal; i++) {
+      int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
+      formatarDuracao(t1, sizeof(t1), agora - historico[idx].quando);
+      snprintf(buf, sizeof(buf),
+               "<li><span class='t'>ha %s</span><br>%s</li>",
+               t1, historico[idx].texto);
+      enviarHtml(buf);
+    }
   }
-  snprintf(buf, sizeof(buf),
-           "<tr><td>Ultima</td><td>ha %s</td></tr>"
-           "<tr><td>Proxima em</td><td>%s</td></tr>"
-           "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
-           "<tr><td>WoL desde o boot</td><td>%d</td></tr></table>",
-           t1, t2, tentativasWol, totalWolDesdeBoot);
-  enviarHtml(buf);
+  enviarHtml("</ul>");
 
-  // ESP32
+  // O aparelho, por ultimo.
   enviarHtml("<h2>ESP32</h2><table>");
 
   // Mesma informacao do banner de boot, para quem so tem a pagina a mao.
@@ -973,31 +1083,7 @@ void paginaStatus() {
   //   enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
   //              "desde que o aparelho ligou.</div>");
 
-  // Alvo
-  snprintf(buf, sizeof(buf),
-           "<h2>%s</h2><table>"
-           "<tr><td>IP</td><td>%s</td></tr>"
-           "<tr><td>MAC</td><td>%02X:%02X:%02X:%02X:%02X:%02X</td></tr></table>",
-           ALVO_NOME, ALVO_IP.toString().c_str(),
-           ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
-           ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
-  enviarHtml(buf);
-
-  // Ocorrencias, da mais recente para a mais antiga
-  enviarHtml("<h2>Ocorrencias</h2><ul>");
-  if (historicoTotal == 0) {
-    enviarHtml("<li>nenhuma ainda</li>");
-  } else {
-    for (int i = 0; i < historicoTotal; i++) {
-      int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
-      formatarDuracao(t1, sizeof(t1), agora - historico[idx].quando);
-      snprintf(buf, sizeof(buf),
-               "<li><span class='t'>ha %s</span><br>%s</li>",
-               t1, historico[idx].texto);
-      enviarHtml(buf);
-    }
-  }
-  enviarHtml("</ul></body></html>");
+  enviarHtml("</body></html>");
 
   server.sendContent("", 0);   // encerra o chunked
 }

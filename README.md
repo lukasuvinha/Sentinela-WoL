@@ -240,19 +240,55 @@ sentinela parar de vigiar porque o servidor web dela travou o aparelho.
 
 ### O que ela mostra
 
+A página tem **três blocos, nesta ordem**, e a ordem tem uma razão: a
+máquina vigiada é a pergunta que traz alguém até ali; as ocorrências
+explicam o que aconteceu com ela; o aparelho vem por último, porque quem
+olha o próprio firmware não está com pressa.
+
+```
+Sentinela Wake-on-LAN
+
+┌─ cartão da máquina ──────────────────┐
+│ servidor                             │  <- nome, cor neutra
+│ ONLINE                               │  <- estado, colorido
+│ há 4h 12min                          │
+│                                      │
+│ IP                    192.168.X.Y    │
+│ MAC                   AA:BB:...      │
+│ Última verificação    há 2min        │
+│ Próxima em            3min           │
+│ WoL desde a última subida     0      │
+│ WoL desde o boot              1      │
+└──────────────────────────────────────┘
+
+OCORRÊNCIAS
+  ...
+
+ESP32
+  Firmware / Ligado há / IP / Reinícios
+```
+
+**O cartão é a unidade que se repete.** Tudo que é de uma máquina está
+dentro dele — nome, estado, endereço e os contadores dela — e nada do
+aparelho. Quando o projeto passar a acordar mais de uma, só esse bloco
+cresce, por repetição, e o resto da página fica igual. No `main.cpp` ele
+já é uma função separada (`emitirBlocoMaquina()`) chamada uma única vez,
+que é o ponto exato onde entra o laço.
+
 | Bloco | Campo | O que é |
 |---|---|---|
-| topo | Estado e "há ..." | `ONLINE`, `OFFLINE` ou `verificando`, e há quanto tempo está assim. Conta desde a última **transição**, não desde o boot. |
-| Verificação | Última | Há quanto tempo foi o último ping. |
-| Verificação | Próxima&nbsp;em | Quanto falta para a próxima. Mostra `agora` quando o ciclo já deveria ter acontecido — o aparelho está no meio de uma checagem. |
-| Verificação | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
-| Verificação | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
+| Máquina | Nome | Vem do `SECRET_ALVO_NOME`. Em cor neutra, e não junto do estado: pintar o nome de verde faria parecer que ele faz parte do estado. |
+| Máquina | Estado e "há ..." | `ONLINE`, `OFFLINE` ou `verificando`, colorido, e há quanto tempo está assim. Conta desde a última **transição**, não desde o boot. |
+| Máquina | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
+| Máquina | Última verificação | Há quanto tempo foi o último ping. |
+| Máquina | Próxima&nbsp;em | Quanto falta para a próxima. Mostra `agora` quando o ciclo já deveria ter acontecido — o aparelho está no meio de uma checagem. |
+| Máquina | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
+| Máquina | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
+| Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. Vale para todas as máquinas. |
 | ESP32 | Firmware | A versão editada a mão e o momento da compilação. Ver "Carimbo de versão". |
 | ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício periódico (24 h no padrão), adiante. |
 | ESP32 | IP | Do próprio ESP32, lido da pilha de rede — o que ele de fato está usando. |
 | ESP32 | Reinícios | Quantos desde a última queda de energia, e o motivo do último. |
-| Alvo | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
-| Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. |
 
 **Três campos foram retirados desta tela**: o heap livre, o mínimo desde
 o boot, e o MAC do próprio ESP32. A página existe para responder "o
