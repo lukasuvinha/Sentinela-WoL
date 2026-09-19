@@ -951,9 +951,9 @@ mensagem.
 mudar o `HISTORICO_TEXTO`, um segundo `static_assert` para o build e manda
 refazê-la.
 
-#### As duas travas de natureza diferente
+#### As cinco travas de natureza diferente
 
-Existem mais dois `static_assert` no `main.cpp`, e nenhum deles tem
+Existem mais cinco `static_assert` no `main.cpp`, e nenhum deles tem
 relação com o `secrets.h`. Não são campos que o usuário preenche: são
 tetos de projeto, e **só aparecem para quem alterar aqueles valores no
 código** — quem apenas instala a sentinela nunca vai vê-los.
@@ -984,6 +984,43 @@ Sem ela, aumentar o histórico deixaria o teto do nome apertado à toa, e
 **diminuí-lo traria de volta o truncamento silencioso** que a trava do
 nome existe para impedir — sem nenhum aviso, porque a conta vive num
 comentário e comentário não compila.
+
+**As três últimas** fecham a outra metade do mesmo problema, e são as mais
+importantes do conjunto. O teto do nome depende de duas coisas: o
+`HISTORICO_TEXTO`, protegido pelo espelho acima, e o **texto literal das
+mensagens de ocorrência** — e essa segunda metade é a que muda. Ninguém
+redimensiona buffer por acaso; todo mundo ajusta mensagem.
+
+Os três formatos que usam o nome viraram constantes nomeadas
+(`FMT_ALVO_SUBIU`, `FMT_ALVO_JA_ESTAVA`, `FMT_ALVO_SEM_RESPOSTA`) por um
+motivo único: **assim o compilador consegue medi-los**. Cada um tem um
+`static_assert` que calcula o pior caso a partir do próprio literal —
+tamanho do formato, menos os especificadores, mais `ALVO_NOME_MAX`, mais
+os dígitos reservados — e confere contra o `HISTORICO_TEXTO`:
+
+```
+O texto de '%s ONLINE apos %d tentativa(s) de WoL' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+O texto de '%s ONLINE (ja estava ligado no boot)' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+O texto de '%s parou de responder' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+```
+
+A folga de cada um é diferente, e vale conhecer antes de mexer:
+
+| Formato | Pior caso | Folga |
+|---|---|---|
+| `%s ONLINE apos %d tentativa(s) de WoL` | 55 | **0** |
+| `%s ONLINE (ja estava ligado no boot)` | 52 | 3 |
+| `%s parou de responder` | 37 | 18 |
+
+O primeiro tem folga **zero** — é dele que o teto de 18 foi derivado, então
+**um único caractere a mais para o build**. Verificado na bancada: com +0
+compila, com +1 para; no segundo, +3 compila e +4 para.
+
+Não é rigor gratuito. Com os nomes reais do parque, de 10 caracteres ou
+menos, sobram 8 de folga — e essa folga não corre risco por causa de um
+nome novo, corre risco porque **alguém vai querer deixar uma mensagem mais
+clara**. É o tipo de mudança que este projeto faz toda semana, e que já o
+mordeu três vezes: o `24h`, o `10s`, e as duas derivas do README.
 
 ### 4. Verificar que o alvo acordou
 

@@ -248,6 +248,59 @@ static_assert(comprimento(SECRET_ALVO_NOME) <= ALVO_NOME_MAX,
               "Acima disso a ocorrencia do historico e truncada em silencio. "
               "Escolha um nome mais curto em src/secrets.h.");
 
+// Quantos digitos do contador de tentativas cabem no orcamento. Quatro
+// digitos sao 9999 tentativas; com retentativas de 5 min depois das tres
+// primeiras, mais de um mes de alvo fora do ar.
+constexpr int DIGITOS_RESERVADOS = 4;
+
+// ---- Os formatos das ocorrencias que usam o nome ---------------------
+// Extraidos para constantes NOMEADAS por um motivo unico: assim a trava
+// logo abaixo consegue MEDI-LOS. Enquanto eram literais soltos dentro do
+// registrar(), a conta do teto do nome vivia num comentario - e comentario
+// nao compila.
+//
+// Estes tres textos aparecem na pagina de status. Mexer neles e legitimo;
+// mexer sem refazer a conta, nao. A partir daqui o compilador cobra.
+constexpr char FMT_ALVO_SUBIU[]      = "%s ONLINE apos %d tentativa(s) de WoL";
+constexpr char FMT_ALVO_JA_ESTAVA[]  = "%s ONLINE (ja estava ligado no boot)";
+constexpr char FMT_ALVO_SEM_RESPOSTA[] = "%s parou de responder";
+
+// Pior caso de uma ocorrencia: o literal do formato (tirando os
+// especificadores), mais o nome no teto, mais os digitos reservados.
+// O -1 do comprimento tira o terminador que o sizeof do array inclui.
+constexpr int piorCasoOcorrencia(const char* fmt, int digitos) {
+  return comprimento(fmt) - 2                    /* o "%s" do nome */
+                          - (digitos > 0 ? 2 : 0) /* o "%d", se houver */
+                          + ALVO_NOME_MAX
+                          + digitos;
+}
+
+// ---- A trava que o comentario pedia e nao conseguia garantir ---------
+// Acrescentar meia duzia de palavras a qualquer uma das tres mensagens
+// acima encolhia o espaco do nome EM SILENCIO. Agora para o build.
+//
+// E esta e a razao de ela existir, e nao "nome comprido": os nomes reais
+// do parque tem 10 caracteres ou menos, entao ha 8 de folga sobrando. Essa
+// folga nao corre risco por causa de um nome novo - corre risco porque
+// alguem vai querer deixar uma mensagem mais clara, o que e exatamente o
+// tipo de mudanca que este projeto faz toda semana. Foi assim com o "24h"
+// e com o "10s".
+static_assert(piorCasoOcorrencia(FMT_ALVO_SUBIU, DIGITOS_RESERVADOS)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s ONLINE apos %d tentativa(s) de WoL' cresceu e nao cabe "
+              "mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+static_assert(piorCasoOcorrencia(FMT_ALVO_JA_ESTAVA, 0)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s ONLINE (ja estava ligado no boot)' cresceu e nao cabe "
+              "mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+static_assert(piorCasoOcorrencia(FMT_ALVO_SEM_RESPOSTA, 0)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s parou de responder' cresceu e nao cabe mais no "
+              "historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+
 
 // MAC e IP tambem tem trava, e sao os dois campos que mais precisam
 // dela: MAC errado nao gera erro nenhum em execucao (o magic packet sai
@@ -1138,9 +1191,9 @@ void loop() {
         Serial.print("Subiu depois de ");
         Serial.print(tentativasWol);
         Serial.println(" tentativa(s) de Wake-on-LAN.");
-        registrar("%s ONLINE apos %d tentativa(s) de WoL", ALVO_NOME, tentativasWol);
+        registrar(FMT_ALVO_SUBIU, ALVO_NOME, tentativasWol);
       } else {
-        registrar("%s ONLINE (ja estava ligado no boot)", ALVO_NOME);
+        registrar(FMT_ALVO_JA_ESTAVA, ALVO_NOME);
       }
       estado = ONLINE;
       estadoDesde = millis();
@@ -1158,7 +1211,7 @@ void loop() {
   // Nao respondeu: tratar como desligado e acordar.
   Serial.println("SEM RESPOSTA.");
   if (estado != OFFLINE) {
-    registrar("%s parou de responder", ALVO_NOME);
+    registrar(FMT_ALVO_SEM_RESPOSTA, ALVO_NOME);
     estadoDesde = millis();
   }
   estado = OFFLINE;
