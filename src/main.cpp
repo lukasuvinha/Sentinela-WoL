@@ -186,6 +186,9 @@ static bool constexpr mesmaString(const char* a, const char* b) {
 static bool constexpr vazia(const char* s) {
   return *s == '\0';
 }
+static constexpr int comprimento(const char* s) {
+  return *s == '\0' ? 0 : 1 + comprimento(s + 1);
+}
 
 static_assert(!mesmaString(SECRET_WIFI_SSID, "PREENCHER_SSID_AQUI"),
               "Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.");
@@ -204,6 +207,47 @@ static_assert(!mesmaString(SECRET_ALVO_NOME, "PREENCHER_NOME_DO_ALVO"),
               "Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.");
 static_assert(!vazia(SECRET_ALVO_NOME),
               "SECRET_ALVO_NOME esta vazio em src/secrets.h.");
+
+// ---- Teto do nome, e a conta que o produz ----------------------------
+// O nome desemboca no buffer mais apertado do projeto: cada entrada do
+// historico e um char[HISTORICO_TEXTO], e o snprintf que a preenche trunca
+// em SILENCIO - no canal que existe justamente para contar o que
+// aconteceu. Sem trava, um nome comprido comeria o fim da mensagem sem
+// nenhum aviso.
+//
+// A CONTA, refeita a partir dos tres formatos que usam ALVO_NOME.
+// Uteis = HISTORICO_TEXTO - 1 = 55 (o snprintf reserva o terminador).
+//
+//   formato                                 literal  teto do nome
+//   "%s parou de responder"                      19        36
+//   "%s ONLINE (ja estava ligado no boot)"       34        21
+//   "%s ONLINE apos %d tentativa(s) de WoL"      33   21 - digitos
+//
+// O terceiro manda, porque o %d cresce. Dimensionado para 4 digitos:
+// 55 - 33 - 4 = 18. Quatro digitos sao 9999 tentativas, e como as
+// retentativas ficam espacadas de 5 min depois das tres primeiras, isso e
+// mais de um mes de alvo fora do ar - a essa altura o problema nao e o
+// texto da ocorrencia.
+//
+// E se estourar mesmo assim, o dano e limitado: o %s vem PRIMEIRO no
+// formato, entao o nome nunca e a parte cortada - quem perde o fim e a
+// mensagem ("... de WoL" vira "... de W").
+//
+// QUEM MEXER NO TEXTO DAS OCORRENCIAS PRECISA REFAZER ESTA CONTA. Se o
+// maior literal crescer, o teto abaixo tem que encolher na mesma medida.
+constexpr int ALVO_NOME_MAX = 18;
+
+
+// Espelho de HISTORICO_TEXTO, que so e declarado mais adiante no arquivo.
+// O static_assert la embaixo garante que os dois nao se separem: mudar o
+// tamanho do historico sem refazer a conta acima para o build.
+constexpr int HISTORICO_TEXTO_ESPELHO = 56;
+
+static_assert(comprimento(SECRET_ALVO_NOME) <= ALVO_NOME_MAX,
+              "SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. "
+              "Acima disso a ocorrencia do historico e truncada em silencio. "
+              "Escolha um nome mais curto em src/secrets.h.");
+
 
 // MAC e IP tambem tem trava, e sao os dois campos que mais precisam
 // dela: MAC errado nao gera erro nenhum em execucao (o magic packet sai
@@ -309,6 +353,12 @@ int totalWolDesdeBoot           = 0;
 // minutos e o historico nao serviria para nada.
 const int HISTORICO_TAMANHO = 20;
 const int HISTORICO_TEXTO   = 56;
+
+// Se este valor mudar, a conta do ALVO_NOME_MAX (la em cima, junto dos
+// static_assert do nome) deixa de valer. Esta trava obriga a refazer.
+static_assert(HISTORICO_TEXTO == HISTORICO_TEXTO_ESPELHO,
+              "HISTORICO_TEXTO mudou. Refaca a conta do ALVO_NOME_MAX, que "
+              "dimensiona o nome do alvo a partir deste tamanho.");
 
 struct Ocorrencia {
   unsigned long quando;

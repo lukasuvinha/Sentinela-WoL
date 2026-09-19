@@ -873,7 +873,7 @@ culpando o alvo por um defeito local. Ver `alvoResponde()`.
 ### Erro de compilação esperado
 
 Se algum campo do `secrets.h` não estiver utilizável, o build **falha de
-propósito**, antes de gerar firmware. São **quinze travas**, duas por
+propósito**, antes de gerar firmware. São **dezesseis travas**, duas por
 campo de texto e duas por campo numérico — uma pega o descuido de não
 editar, outra o de editar errado. A máscara é a única com uma só, pelo
 motivo explicado na seção de configuração.
@@ -889,6 +889,7 @@ estas:
 | Apagou a senha e deixou `""` | `SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.` |
 | Idem, nome do alvo | `Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.` |
 | Apagou o nome do alvo e deixou `""` | `SECRET_ALVO_NOME esta vazio em src/secrets.h.` |
+| Nome do alvo com mais de 18 caracteres | `SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. Acima disso a ocorrencia do historico e truncada em silencio. Escolha um nome mais curto em src/secrets.h.` |
 | MAC do alvo com número de bytes errado — cinco, sete | `SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.` |
 | MAC do alvo ainda no valor do template | `SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.` |
 | IP do alvo com número de octetos errado | `SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
@@ -920,13 +921,45 @@ comentar o `static_assert` correspondente no `main.cpp` — há um
 comentário no lugar explicando. Vale lembrar que rede aberta é escolha
 ruim para um aparelho que fica ligado permanentemente.
 
-#### A décima sexta trava, de natureza diferente
+#### O teto de 18 caracteres do nome, e a conta que o produz
 
-Existe mais um `static_assert` no `main.cpp`, e ele **não** tem relação
-com o `secrets.h`. Não é campo que o usuário preenche: é um teto de
-projeto sobre `REINICIO_PERIODICO_MS`, a constante do reinício de
-higiene. Só aparece para quem alterar aquele valor no código — quem
-apenas instala a sentinela nunca vai vê-lo.
+Esta é a única trava cujo limite não é óbvio, então vale o raciocínio. O
+nome do alvo desemboca no buffer mais apertado do projeto: cada entrada do
+histórico é um `char[56]`, e o `snprintf` que a preenche **trunca em
+silêncio** — no canal que existe justamente para contar o que aconteceu.
+
+A conta sai dos três formatos que usam o nome. Úteis são 55 caracteres,
+porque o `snprintf` reserva o terminador:
+
+| Formato da ocorrência | Literal | Teto do nome |
+|---|---|---|
+| `%s parou de responder` | 19 | 36 |
+| `%s ONLINE (ja estava ligado no boot)` | 34 | 21 |
+| `%s ONLINE apos %d tentativa(s) de WoL` | 33 | 21 − dígitos |
+
+O terceiro manda, porque o `%d` cresce. Dimensionado para **4 dígitos**:
+`55 − 33 − 4 = 18`. Quatro dígitos são 9999 tentativas, e como as
+retentativas ficam espaçadas de 5 min depois das três primeiras, isso é
+mais de um mês de alvo fora do ar — a essa altura o problema não é o texto
+da ocorrência.
+
+Se estourar mesmo assim, o dano é limitado: o `%s` vem **primeiro** no
+formato, então o nome nunca é a parte cortada — quem perde o fim é a
+mensagem.
+
+**Quem mexer no texto das ocorrências precisa refazer esta conta.** E se
+mudar o `HISTORICO_TEXTO`, um segundo `static_assert` para o build e manda
+refazê-la.
+
+#### As duas travas de natureza diferente
+
+Existem mais dois `static_assert` no `main.cpp`, e nenhum deles tem
+relação com o `secrets.h`. Não são campos que o usuário preenche: são
+tetos de projeto, e **só aparecem para quem alterar aqueles valores no
+código** — quem apenas instala a sentinela nunca vai vê-los.
+
+**A primeira** é um teto sobre `REINICIO_PERIODICO_MS`, a constante do
+reinício de higiene.
 
 ```
 REINICIO_PERIODICO_MS perto demais do estouro de millis() (~49,7 dias). Acima de ~40 dias a comparacao direta do loop() deixa de valer: troque por (millis() - referencia) > REINICIO_PERIODICO_MS, guardando a referencia do boot numa variavel.
@@ -937,6 +970,20 @@ direta (`millis() > REINICIO_PERIODICO_MS`) e só vale porque a referência
 é o boot e 24 h está longe do estouro de ~49,7 dias. O teto de 40 dias
 existe para que aumentar a constante além disso pare o build, em vez de
 produzir um aparelho que reinicia na hora errada meses depois.
+
+**A segunda** guarda a conta do teto de 18 caracteres do nome, explicada
+acima. O teto foi calculado a partir do `HISTORICO_TEXTO`, mas os dois
+ficam longe um do outro no arquivo — então um espelho ligado por
+`static_assert` impede que se separem:
+
+```
+HISTORICO_TEXTO mudou. Refaca a conta do ALVO_NOME_MAX, que dimensiona o nome do alvo a partir deste tamanho.
+```
+
+Sem ela, aumentar o histórico deixaria o teto do nome apertado à toa, e
+**diminuí-lo traria de volta o truncamento silencioso** que a trava do
+nome existe para impedir — sem nenhum aviso, porque a conta vive num
+comentário e comentário não compila.
 
 ### 4. Verificar que o alvo acordou
 
