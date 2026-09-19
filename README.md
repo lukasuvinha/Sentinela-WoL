@@ -283,7 +283,7 @@ que é o ponto exato onde entra o laço.
 | Máquina | Última verificação | Há quanto tempo foi o último ping. |
 | Máquina | Próxima&nbsp;em | Quanto falta para a próxima. Mostra `agora` quando o ciclo já deveria ter acontecido — o aparelho está no meio de uma checagem. |
 | Máquina | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
-| Máquina | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
+| Máquina | WoL total desde o boot do ESP32 | Total acumulado de magic packets enviados a **esta máquina**. Não zera. O rótulo diz "do ESP32" de propósito: o contador vive na RAM do aparelho, então é o boot dele que o zera — não o da máquina vigiada. |
 | Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. Vale para todas as máquinas. |
 | ESP32 | Firmware | A versão editada a mão e o momento da compilação. Ver "Carimbo de versão". |
 | ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício periódico (24 h no padrão), adiante. |

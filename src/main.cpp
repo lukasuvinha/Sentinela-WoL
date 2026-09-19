@@ -386,7 +386,16 @@ int tentativasWol = 0;
 unsigned long estadoDesde       = 0;
 unsigned long ultimaVerificacao = 0;
 unsigned long proximaEspera     = 0;
-int totalWolDesdeBoot           = 0;
+
+// Total de Wake-on-LAN enviados A ESTA MAQUINA, sem nunca zerar. O irmao
+// dele, tentativasWol, zera quando a maquina sobe; este acumula.
+//
+// O nome antigo era totalWolDesdeBoot, e enganava: "desde o boot" descreve
+// onde ele vive (RAM comum, que o reinicio apaga), nao o que ele conta.
+// Com um alvo so os dois sentidos coincidiam; com varios, cada maquina
+// tera o seu, e um nome que fala do aparelho no contador de uma maquina
+// mandaria para o lugar errado quem for ler.
+int wolTotalDoAlvo              = 0;
 
 // ---------------------------------------------------------------
 // Historico de ocorrencias
@@ -903,8 +912,9 @@ void emitirBlocoMaquina(unsigned long agora) {
   // truncamento do snprintf e silencioso e cai no meio de uma tag.
   snprintf(buf, sizeof(buf),
            "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
-           "<tr><td>WoL desde o boot</td><td>%d</td></tr></table></div>",
-           tentativasWol, totalWolDesdeBoot);
+           "<tr><td>WoL total desde o boot do ESP32</td><td>%d</td></tr>"
+           "</table></div>",
+           tentativasWol, wolTotalDoAlvo);
   enviarHtml(buf);
 }
 
@@ -1302,7 +1312,7 @@ void loop() {
   }
   estado = OFFLINE;
   tentativasWol++;
-  totalWolDesdeBoot++;
+  wolTotalDoAlvo++;
 
   Serial.print("Enviando Wake-on-LAN (tentativa ");
   Serial.print(tentativasWol);
