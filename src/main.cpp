@@ -115,7 +115,26 @@ const int WOL_PORT   = 9;   // porta padrao do Wake-on-LAN
 const int REPETICOES = 3;   // manda o pacote 3x (UDP nao garante entrega)
 
 // --- Tempos ---
-const unsigned long WIFI_TIMEOUT_MS = 30000;        // 30 s para conectar no Wi-Fi
+// Quanto insistir no Wi-Fi antes de desistir e reiniciar.
+//
+// Eram 30 s, e a medicao mostrou que era pouco. Em dois episodios
+// capturados o roteador entrou num estado em que nenhum aparelho
+// conseguia associar - o PC da bancada ficou 66 s fora numa das medicoes,
+// e o AP levou minutos para voltar. Com 30 s de timeout mais 10 s de
+// espera, cada volta custava ~40 s, e uma unica indisponibilidade do
+// roteador produzia varios reinicios seguidos.
+//
+// Reiniciar nao ajuda quando quem esta fora e o AP: so troca uma espera
+// por outra, e ainda apaga o historico que vive na RAM. O reinicio existe
+// para o caso do stack de Wi-Fi DESTE aparelho travar, que e raro - e 3
+// min continuam curtos o bastante para cobrir esse caso.
+const unsigned long WIFI_TIMEOUT_MS = 3UL * 60UL * 1000UL;  // 3 min
+
+// Espera entre anunciar a falha e reiniciar. Constante, e nao numero solto
+// no meio da frase: a mensagem de serial e montada a partir dela, porque
+// este projeto ja foi mordido por valor escrito a mao (ver o "24h" do
+// reinicio periodico).
+const unsigned long ESPERA_ANTES_DE_REINICIAR_MS = 10UL * 1000UL;  // 10 s
 
 const unsigned long INTERVALO_MONITORAMENTO_MS = 5UL * 60UL * 1000UL;  // 5 min
 const unsigned long ESPERA_POS_WOL_MS          = 90UL * 1000UL;        // 90 s
@@ -167,6 +186,9 @@ static bool constexpr mesmaString(const char* a, const char* b) {
 static bool constexpr vazia(const char* s) {
   return *s == '\0';
 }
+static constexpr int comprimento(const char* s) {
+  return *s == '\0' ? 0 : 1 + comprimento(s + 1);
+}
 
 static_assert(!mesmaString(SECRET_WIFI_SSID, "PREENCHER_SSID_AQUI"),
               "Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.");
@@ -185,6 +207,100 @@ static_assert(!mesmaString(SECRET_ALVO_NOME, "PREENCHER_NOME_DO_ALVO"),
               "Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.");
 static_assert(!vazia(SECRET_ALVO_NOME),
               "SECRET_ALVO_NOME esta vazio em src/secrets.h.");
+
+// ---- Teto do nome, e a conta que o produz ----------------------------
+// O nome desemboca no buffer mais apertado do projeto: cada entrada do
+// historico e um char[HISTORICO_TEXTO], e o snprintf que a preenche trunca
+// em SILENCIO - no canal que existe justamente para contar o que
+// aconteceu. Sem trava, um nome comprido comeria o fim da mensagem sem
+// nenhum aviso.
+//
+// A CONTA, refeita a partir dos tres formatos que usam ALVO_NOME.
+// Uteis = HISTORICO_TEXTO - 1 = 55 (o snprintf reserva o terminador).
+//
+//   formato                                 literal  teto do nome
+//   "%s parou de responder"                      19        36
+//   "%s ONLINE (ja estava ligado no boot)"       34        21
+//   "%s ONLINE apos %d tentativa(s) de WoL"      33   21 - digitos
+//
+// O terceiro manda, porque o %d cresce. Dimensionado para 4 digitos:
+// 55 - 33 - 4 = 18. Quatro digitos sao 9999 tentativas, e como as
+// retentativas ficam espacadas de 5 min depois das tres primeiras, isso e
+// mais de um mes de alvo fora do ar - a essa altura o problema nao e o
+// texto da ocorrencia.
+//
+// E se estourar mesmo assim, o dano e limitado: o %s vem PRIMEIRO no
+// formato, entao o nome nunca e a parte cortada - quem perde o fim e a
+// mensagem ("... de WoL" vira "... de W").
+//
+// QUEM MEXER NO TEXTO DAS OCORRENCIAS PRECISA REFAZER ESTA CONTA. Se o
+// maior literal crescer, o teto abaixo tem que encolher na mesma medida.
+constexpr int ALVO_NOME_MAX = 18;
+
+
+// Espelho de HISTORICO_TEXTO, que so e declarado mais adiante no arquivo.
+// O static_assert la embaixo garante que os dois nao se separem: mudar o
+// tamanho do historico sem refazer a conta acima para o build.
+constexpr int HISTORICO_TEXTO_ESPELHO = 56;
+
+static_assert(comprimento(SECRET_ALVO_NOME) <= ALVO_NOME_MAX,
+              "SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. "
+              "Acima disso a ocorrencia do historico e truncada em silencio. "
+              "Escolha um nome mais curto em src/secrets.h.");
+
+// Quantos digitos do contador de tentativas cabem no orcamento. Quatro
+// digitos sao 9999 tentativas; com retentativas de 5 min depois das tres
+// primeiras, mais de um mes de alvo fora do ar.
+constexpr int DIGITOS_RESERVADOS = 4;
+
+// ---- Os formatos das ocorrencias que usam o nome ---------------------
+// Extraidos para constantes NOMEADAS por um motivo unico: assim a trava
+// logo abaixo consegue MEDI-LOS. Enquanto eram literais soltos dentro do
+// registrar(), a conta do teto do nome vivia num comentario - e comentario
+// nao compila.
+//
+// Estes tres textos aparecem na pagina de status. Mexer neles e legitimo;
+// mexer sem refazer a conta, nao. A partir daqui o compilador cobra.
+constexpr char FMT_ALVO_SUBIU[]      = "%s ONLINE apos %d tentativa(s) de WoL";
+constexpr char FMT_ALVO_JA_ESTAVA[]  = "%s ONLINE (ja estava ligado no boot)";
+constexpr char FMT_ALVO_SEM_RESPOSTA[] = "%s parou de responder";
+
+// Pior caso de uma ocorrencia: o literal do formato (tirando os
+// especificadores), mais o nome no teto, mais os digitos reservados.
+// O -1 do comprimento tira o terminador que o sizeof do array inclui.
+constexpr int piorCasoOcorrencia(const char* fmt, int digitos) {
+  return comprimento(fmt) - 2                    /* o "%s" do nome */
+                          - (digitos > 0 ? 2 : 0) /* o "%d", se houver */
+                          + ALVO_NOME_MAX
+                          + digitos;
+}
+
+// ---- A trava que o comentario pedia e nao conseguia garantir ---------
+// Acrescentar meia duzia de palavras a qualquer uma das tres mensagens
+// acima encolhia o espaco do nome EM SILENCIO. Agora para o build.
+//
+// E esta e a razao de ela existir, e nao "nome comprido": os nomes reais
+// do parque tem 10 caracteres ou menos, entao ha 8 de folga sobrando. Essa
+// folga nao corre risco por causa de um nome novo - corre risco porque
+// alguem vai querer deixar uma mensagem mais clara, o que e exatamente o
+// tipo de mudanca que este projeto faz toda semana. Foi assim com o "24h"
+// e com o "10s".
+static_assert(piorCasoOcorrencia(FMT_ALVO_SUBIU, DIGITOS_RESERVADOS)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s ONLINE apos %d tentativa(s) de WoL' cresceu e nao cabe "
+              "mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+static_assert(piorCasoOcorrencia(FMT_ALVO_JA_ESTAVA, 0)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s ONLINE (ja estava ligado no boot)' cresceu e nao cabe "
+              "mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+static_assert(piorCasoOcorrencia(FMT_ALVO_SEM_RESPOSTA, 0)
+                  <= HISTORICO_TEXTO_ESPELHO - 1,
+              "O texto de '%s parou de responder' cresceu e nao cabe mais no "
+              "historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
+              "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
+
 
 // MAC e IP tambem tem trava, e sao os dois campos que mais precisam
 // dela: MAC errado nao gera erro nenhum em execucao (o magic packet sai
@@ -270,7 +386,16 @@ int tentativasWol = 0;
 unsigned long estadoDesde       = 0;
 unsigned long ultimaVerificacao = 0;
 unsigned long proximaEspera     = 0;
-int totalWolDesdeBoot           = 0;
+
+// Total de Wake-on-LAN enviados A ESTA MAQUINA, sem nunca zerar. O irmao
+// dele, tentativasWol, zera quando a maquina sobe; este acumula.
+//
+// O nome antigo era totalWolDesdeBoot, e enganava: "desde o boot" descreve
+// onde ele vive (RAM comum, que o reinicio apaga), nao o que ele conta.
+// Com um alvo so os dois sentidos coincidiam; com varios, cada maquina
+// tera o seu, e um nome que fala do aparelho no contador de uma maquina
+// mandaria para o lugar errado quem for ler.
+int wolTotalDoAlvo              = 0;
 
 // ---------------------------------------------------------------
 // Historico de ocorrencias
@@ -290,6 +415,12 @@ int totalWolDesdeBoot           = 0;
 // minutos e o historico nao serviria para nada.
 const int HISTORICO_TAMANHO = 20;
 const int HISTORICO_TEXTO   = 56;
+
+// Se este valor mudar, a conta do ALVO_NOME_MAX (la em cima, junto dos
+// static_assert do nome) deixa de valer. Esta trava obriga a refazer.
+static_assert(HISTORICO_TEXTO == HISTORICO_TEXTO_ESPELHO,
+              "HISTORICO_TEXTO mudou. Refaca a conta do ALVO_NOME_MAX, que "
+              "dimensiona o nome do alvo a partir deste tamanho.");
 
 struct Ocorrencia {
   unsigned long quando;
@@ -559,9 +690,11 @@ void garantirWiFi() {
       Serial.println("FALHA: nao conectou no Wi-Fi dentro do timeout.");
       Serial.println("Confira SSID/senha em src/secrets.h.");
       Serial.println("Confira tambem se a rede e 2.4 GHz (o ESP32 nao fala 5 GHz).");
-      Serial.println("Reiniciando em 10s para tentar de novo...");
+      Serial.print("Reiniciando em ");
+      Serial.print(ESPERA_ANTES_DE_REINICIAR_MS / 1000UL);
+      Serial.println("s para tentar de novo...");
       Serial.flush();
-      delay(10000);
+      delay(ESPERA_ANTES_DE_REINICIAR_MS);
       // dispositivo sem operador: tem que se recuperar sozinho
       reiniciar("Wi-Fi nao conectou dentro do prazo");
 
@@ -570,8 +703,8 @@ void garantirWiFi() {
       // ----------------------------------------------------------------
       // PROPOSITO
       //   Se o roteador ficar fora do ar por muito tempo, o ESP.restart()
-      //   acima vira um ciclo de reboot a cada ~40s (30s de timeout + 10s
-      //   de espera), indefinidamente. A alternativa seria insistir no
+      //   acima vira um ciclo de reboot a cada ~3min10s (3 min de timeout
+      //   + 10 s de espera), indefinidamente. A alternativa seria insistir no
       //   Wi-Fi aqui mesmo, sem nunca reiniciar.
       //
       // SOLUCAO PROPOSTA
@@ -608,10 +741,23 @@ void garantirWiFi() {
   Serial.println();
   Serial.print("Wi-Fi OK. IP do ESP32: ");
   Serial.println(WiFi.localIP());
+  // Quanto tempo levou entra no historico de proposito, e e a compensacao
+  // por ter subido o timeout para 3 min. Antes, quando o AP ficava em mau
+  // estado, o aparelho reiniciava e o motivo gravado na RTC RAM
+  // ("Wi-Fi nao conectou dentro do prazo") era o unico sinal de que algo
+  // errado tinha acontecido - foi ele que revelou a causa da investigacao
+  // de setembro. Com 3 min o aparelho passa a aguentar o episodio sem
+  // reiniciar, e aquele sinal desapareceria.
+  //
+  // A duracao substitui o sinal com vantagem: um valor alto diz que a rede
+  // demorou a aceitar o aparelho, e como agora ele NAO reinicia, o registro
+  // sobrevive na RAM em vez de ser apagado pelo proprio reinicio que o
+  // anunciava. Reconexao normal marca 0 ou 1 s e nao polui.
+  const unsigned long levou = (millis() - inicio) / 1000UL;
   if (jaConectouWiFi) {
-    registrar("Wi-Fi reconectado");
+    registrar("Wi-Fi reconectado apos %lu s", levou);
   } else {
-    registrar("Wi-Fi conectado");
+    registrar("Wi-Fi conectado apos %lu s", levou);
   }
   jaConectouWiFi = true;
 
@@ -705,18 +851,89 @@ inline void enviarHtml(const char* s) {
   server.sendContent(s, strlen(s));
 }
 
-void paginaStatus() {
-  const unsigned long agora = millis();
-  // Buffer unico, reaproveitado a cada pedaco. 320 e folgado de proposito:
-  // o snprintf trunca em SILENCIO, e o corte cai no meio de uma tag HTML,
-  // quebrando a pagina sem nenhum sinal de erro. Alem disso ALVO_NOME vem
-  // do secrets.h, onde nada limita o tamanho - um nome de maquina comprido
-  // consome a margem sozinho.
+// Um cartao por maquina vigiada. Esta funcao existe separada de proposito:
+// hoje ela e chamada UMA vez, porque so existe um alvo, mas e exatamente o
+// trecho que vira um laco quando o projeto passar a acordar varias. Tudo
+// que e especifico de uma maquina esta aqui dentro - nome, estado, ha
+// quanto tempo, endereco e os contadores dela - e nada do aparelho.
+//
+// Quando houver N alvos, o corpo nao muda: muda a origem dos dados, que
+// deixa de ser variavel global e passa a ser parametro.
+void emitirBlocoMaquina(unsigned long agora) {
+  // Mesma regra do buffer de paginaStatus: o snprintf trunca em silencio e
+  // o corte cai dentro de uma tag.
   //
-  // Quem acrescentar linhas na tabela abaixo precisa reconferir este valor:
-  // o maior snprintf daqui ja usa ~176 bytes so de HTML literal.
+  // O maior snprintf DESTA funcao e o cabecalho do cartao: 96 bytes de HTML
+  // literal, mais ate 18 do ALVO_NOME (teto garantido pelo static_assert
+  // do nome), 3 da classe de cor, 11 de "verificando" e 20 da duracao.
+  // Pior caso ~148 bytes.
+  //
+  // A tabela vem em tres snprintf e nao em um: as seis linhas juntas
+  // passariam de 320 bytes. Nao junte.
   char buf[320];
   char t1[32], t2[32];
+
+  // Nome em cima, em cor neutra; o estado colorido logo abaixo. Juntar os
+  // dois na mesma linha pintava o nome da maquina de verde, o que lia como
+  // se o nome fizesse parte do estado.
+  formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
+  const char* cor = (estado == ONLINE) ? "on" : (estado == OFFLINE ? "off" : "unk");
+  snprintf(buf, sizeof(buf),
+           "<div class='maq'><div class='nome'>%s</div>"
+           "<div class='big %s'>%s</div><div class='t'>ha %s</div><table>",
+           ALVO_NOME, cor, nomeEstado(), t1);
+  enviarHtml(buf);
+
+  // Identificacao da maquina: os valores compilados, vindos do secrets.h.
+  snprintf(buf, sizeof(buf),
+           "<tr><td>IP</td><td>%s</td></tr>"
+           "<tr><td>MAC</td><td>%02X:%02X:%02X:%02X:%02X:%02X</td></tr>",
+           ALVO_IP.toString().c_str(),
+           ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
+           ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
+  enviarHtml(buf);
+
+  // Ritmo da vigilancia desta maquina.
+  formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
+  const unsigned long decorrido = agora - ultimaVerificacao;
+  if (proximaEspera > decorrido) {
+    formatarDuracao(t2, sizeof(t2), proximaEspera - decorrido);
+  } else {
+    snprintf(t2, sizeof(t2), "agora");
+  }
+  snprintf(buf, sizeof(buf),
+           "<tr><td>Ultima verificacao</td><td>ha %s</td></tr>"
+           "<tr><td>Proxima em</td><td>%s</td></tr>",
+           t1, t2);
+  enviarHtml(buf);
+
+  // Os contadores de Wake-on-LAN sao desta maquina, nao do aparelho.
+  // Tres snprintf e nao um: as seis linhas juntas passam de 320 bytes, e o
+  // truncamento do snprintf e silencioso e cai no meio de uma tag.
+  snprintf(buf, sizeof(buf),
+           "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
+           "<tr><td>WoL total desde o boot do ESP32</td><td>%d</td></tr>"
+           "</table></div>",
+           tentativasWol, wolTotalDoAlvo);
+  enviarHtml(buf);
+}
+
+void paginaStatus() {
+  const unsigned long agora = millis();
+  // Buffer unico, reaproveitado a cada pedaco. O snprintf trunca em
+  // SILENCIO, e o corte cai no meio de uma tag HTML, quebrando a pagina sem
+  // nenhum sinal de erro - por isso a folga e grande de proposito.
+  //
+  // O maior snprintf DESTA funcao e o dos reinicios: 88 bytes de HTML
+  // literal, mais ate 10 do contador e ate 47 do rtcMotivo, que e um
+  // char[48]. Pior caso ~145 bytes, menos da metade do buffer.
+  // (O segundo maior e a linha de ocorrencia: 39 literais + 20 de duracao
+  // + ate 55 do texto do historico = ~114.)
+  //
+  // Os pedacos de uma maquina nao estao aqui: foram para
+  // emitirBlocoMaquina(), que tem buffer proprio e conta propria.
+  char buf[320];
+  char t1[32];
 
   // Transmissao em blocos (chunked): a pagina nunca existe inteira na
   // memoria. Montar tudo numa String antes de enviar pediria ~4 KB de
@@ -729,13 +946,33 @@ void paginaStatus() {
          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta http-equiv='refresh' content='10'>"
          "<title>Sentinela Wake-on-LAN</title><style>"
-         "body{font-family:system-ui,sans-serif;margin:0;padding:16px;"
-         "background:#12141a;color:#e6e6e6;line-height:1.5}"
+         "body{font-family:system-ui,sans-serif;margin:0 auto;padding:16px;"
+         "max-width:1200px;background:#12141a;color:#e6e6e6;line-height:1.5}"
+         // A grade quer largura; texto corrido nao. Os blocos que nao sao
+         // cartao ficam num comprimento de linha legivel.
+         "body>h2,body>ul,body>table{max-width:680px}"
          "h1{font-size:1.1rem;margin:0 0 4px}"
          "h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;"
          "color:#8a93a6;margin:22px 0 6px;font-weight:600}"
-         ".big{font-size:1.7rem;font-weight:700;margin:6px 0 0}"
+         ".big{font-size:1.7rem;font-weight:700;margin:1px 0 0;line-height:1.2}"
          ".on{color:#4ade80}.off{color:#f87171}.unk{color:#facc15}"
+         // O MAXIMO DA COLUNA E FIXO (340px) E NAO 1fr, DE PROPOSITO.
+         // Com 1fr o maximo vira "cresca para ocupar o que sobrar", e um
+         // cartao sozinho se estica pela largura toda do monitor - foi o
+         // que deixou a pagina feia no PC. Com teto proprio, o cartao tem
+         // o mesmo tamanho havendo uma maquina ou dez, e o justify-content
+         // centraliza o conjunto em vez de encostar num canto.
+         //
+         // O min(100%,300px) do minimo evita estouro horizontal em tela
+         // mais estreita que 300px: ali o cartao passa a valer 100%.
+         // Nao troque por 1fr.
+         ".maqs{display:grid;gap:14px;margin:12px 0 20px;justify-content:center;"
+         "grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),340px))}"
+         ".maq{background:#171a21;border:1px solid #262a35;border-radius:10px;"
+         "padding:14px 16px}"
+         ".nome{font-size:1.1rem;font-weight:600;color:#e6e6e6}"
+         ".maq table{margin-top:12px}"
+         ".maq tr:last-child td{border-bottom:none}"
          "table{width:100%;border-collapse:collapse;font-size:.9rem}"
          "td{padding:6px 0;border-bottom:1px solid #262a35;vertical-align:top}"
          "td:first-child{color:#8a93a6;width:48%}"
@@ -746,32 +983,52 @@ void paginaStatus() {
          ".nota{color:#6b7280;font-size:.75rem;margin-top:6px}"
          "</style></head><body><h1>Sentinela Wake-on-LAN</h1>");
 
-  // Estado atual e ha quanto tempo
-  formatarDuracao(t1, sizeof(t1), agora - estadoDesde);
-  const char* cor = (estado == ONLINE) ? "on" : (estado == OFFLINE ? "off" : "unk");
-  snprintf(buf, sizeof(buf),
-           "<div class='big %s'>%s</div><div class='t'>ha %s</div>",
-           cor, nomeEstado(), t1);
-  enviarHtml(buf);
+  // ORDEM DA PAGINA, e ela tem uma razao:
+  //   1. as maquinas vigiadas, que e a pergunta que traz alguem aqui;
+  //   2. as ocorrencias, que explicam o que aconteceu com elas;
+  //   3. o aparelho, por ultimo - quem olha o firmware e a si mesmo nao
+  //      esta com pressa.
+  // Com varias maquinas, so o passo 1 cresce, e cresce por repeticao.
+  // O contentor da grade fica AQUI, e nao dentro de emitirBlocoMaquina():
+  // ele e de todas as maquinas, nao de uma. Com varias, o laco vai aqui
+  // dentro e o CSS faz o resto - empilhado no celular, lado a lado no PC,
+  // sem media query e sem JavaScript:
+  //
+  //   repeat(auto-fit, minmax(min(100%, 300px), 340px))
+  //
+  // O MAXIMO DA COLUNA E FIXO (340px) E NAO 1fr, E ISSO E DELIBERADO.
+  // Com 1fr o maximo vira "cresca para ocupar o que sobrar", e um cartao
+  // sozinho se estica pela largura inteira do monitor - foi exatamente o
+  // que deixou a pagina feia no PC. Com teto proprio, o cartao tem o mesmo
+  // tamanho havendo uma maquina ou dez, e o justify-content centraliza o
+  // conjunto em vez de encosta-lo num canto.
+  //
+  // Trocar por 1fr "para simplificar" traz o problema de volta. O
+  // min(100%, 300px) do minimo tambem nao e enfeite: sem ele, tela mais
+  // estreita que 300px ganha rolagem horizontal.
+  enviarHtml("<div class='maqs'>");
+  emitirBlocoMaquina(agora);
+  enviarHtml("</div>");
 
-  // Verificacao
-  enviarHtml("<h2>Verificacao</h2><table>");
-  formatarDuracao(t1, sizeof(t1), agora - ultimaVerificacao);
-  const unsigned long decorrido = agora - ultimaVerificacao;
-  if (proximaEspera > decorrido) {
-    formatarDuracao(t2, sizeof(t2), proximaEspera - decorrido);
+  // Ocorrencias, da mais recente para a mais antiga. Vale para todas as
+  // maquinas: quando houver mais de uma, o texto de cada ocorrencia ja
+  // carrega o nome (ver registrar()).
+  enviarHtml("<h2>Ocorrencias</h2><ul>");
+  if (historicoTotal == 0) {
+    enviarHtml("<li>nenhuma ainda</li>");
   } else {
-    snprintf(t2, sizeof(t2), "agora");
+    for (int i = 0; i < historicoTotal; i++) {
+      int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
+      formatarDuracao(t1, sizeof(t1), agora - historico[idx].quando);
+      snprintf(buf, sizeof(buf),
+               "<li><span class='t'>ha %s</span><br>%s</li>",
+               t1, historico[idx].texto);
+      enviarHtml(buf);
+    }
   }
-  snprintf(buf, sizeof(buf),
-           "<tr><td>Ultima</td><td>ha %s</td></tr>"
-           "<tr><td>Proxima em</td><td>%s</td></tr>"
-           "<tr><td>WoL desde a ultima subida</td><td>%d</td></tr>"
-           "<tr><td>WoL desde o boot</td><td>%d</td></tr></table>",
-           t1, t2, tentativasWol, totalWolDesdeBoot);
-  enviarHtml(buf);
+  enviarHtml("</ul>");
 
-  // ESP32
+  // O aparelho, por ultimo.
   enviarHtml("<h2>ESP32</h2><table>");
 
   // Mesma informacao do banner de boot, para quem so tem a pagina a mao.
@@ -786,17 +1043,39 @@ void paginaStatus() {
   enviarHtml(buf);
 
   formatarDuracao(t1, sizeof(t1), agora);
-  snprintf(buf, sizeof(buf),
-           "<tr><td>Ligado ha</td><td>%s</td></tr>"
-           "<tr><td>Heap livre</td><td>%u B</td></tr>"
-           "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
-           t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  snprintf(buf, sizeof(buf), "<tr><td>Ligado ha</td><td>%s</td></tr>", t1);
   enviarHtml(buf);
-  snprintf(buf, sizeof(buf),
-           "<tr><td>IP</td><td>%s</td></tr>"
-           "<tr><td>MAC</td><td>%s</td></tr>",
-           WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  snprintf(buf, sizeof(buf), "<tr><td>IP</td><td>%s</td></tr>",
+           WiFi.localIP().toString().c_str());
   enviarHtml(buf);
+
+  // ---- OCULTO NA PAGINA - inicio ----------------------------------
+  // Tres linhas sairam daqui a pedido do dono: heap livre, minimo desde
+  // o boot, e o MAC do proprio ESP32. Nao foram apagadas porque sao uteis
+  // em diagnostico; so nao pertencem a tela do dia a dia, que existe para
+  // responder "o servidor esta no ar?" e nao para medir memoria.
+  //
+  // O heap NAO se perdeu: ele continua saindo na serial a cada ciclo, em
+  // "Verificando o <alvo> (heap livre: N bytes)...". O MAC do ESP32
+  // continua no banner de boot, que e onde alguem procura quando vai criar
+  // reserva de DHCP no roteador.
+  //
+  // PARA REATIVAR: troque os dois snprintf acima por este bloco.
+  //
+  //   snprintf(buf, sizeof(buf),
+  //            "<tr><td>Ligado ha</td><td>%s</td></tr>"
+  //            "<tr><td>Heap livre</td><td>%u B</td></tr>"
+  //            "<tr><td>Minimo desde o boot</td><td>%u B</td></tr>",
+  //            t1, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  //   enviarHtml(buf);
+  //   snprintf(buf, sizeof(buf),
+  //            "<tr><td>IP</td><td>%s</td></tr>"
+  //            "<tr><td>MAC</td><td>%s</td></tr>",
+  //            WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  //   enviarHtml(buf);
+  //
+  // E reative tambem a nota do rodape, logo abaixo dos reinicios.
+  // ---- OCULTO NA PAGINA - fim -------------------------------------
 
   if (rtcReinicios == 0) {
     enviarHtml("<tr><td>Reinicios</td><td>nenhum desde a ultima queda de "
@@ -808,34 +1087,13 @@ void paginaStatus() {
              (unsigned)rtcReinicios, rtcMotivo);
     enviarHtml(buf);
   }
-  enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
-             "desde que o aparelho ligou.</div>");
+  // A nota do rodape explicava o "minimo desde o boot", que saiu da pagina.
+  // Sem a linha que ela explica, viraria legenda de figura ausente.
+  // PARA REATIVAR, junto com o bloco acima:
+  //   enviarHtml("<div class='nota'>O minimo e o pior momento de memoria livre "
+  //              "desde que o aparelho ligou.</div>");
 
-  // Alvo
-  snprintf(buf, sizeof(buf),
-           "<h2>%s</h2><table>"
-           "<tr><td>IP</td><td>%s</td></tr>"
-           "<tr><td>MAC</td><td>%02X:%02X:%02X:%02X:%02X:%02X</td></tr></table>",
-           ALVO_NOME, ALVO_IP.toString().c_str(),
-           ALVO_MAC[0], ALVO_MAC[1], ALVO_MAC[2],
-           ALVO_MAC[3], ALVO_MAC[4], ALVO_MAC[5]);
-  enviarHtml(buf);
-
-  // Ocorrencias, da mais recente para a mais antiga
-  enviarHtml("<h2>Ocorrencias</h2><ul>");
-  if (historicoTotal == 0) {
-    enviarHtml("<li>nenhuma ainda</li>");
-  } else {
-    for (int i = 0; i < historicoTotal; i++) {
-      int idx = (historicoProximo - 1 - i + HISTORICO_TAMANHO * 2) % HISTORICO_TAMANHO;
-      formatarDuracao(t1, sizeof(t1), agora - historico[idx].quando);
-      snprintf(buf, sizeof(buf),
-               "<li><span class='t'>ha %s</span><br>%s</li>",
-               t1, historico[idx].texto);
-      enviarHtml(buf);
-    }
-  }
-  enviarHtml("</ul></body></html>");
+  enviarHtml("</body></html>");
 
   server.sendContent("", 0);   // encerra o chunked
 }
@@ -904,7 +1162,7 @@ void setup() {
   // o que faz cada WiFi.begin() ter a flash como destino de escrita. Aqui
   // isso nao serve para nada: SSID e senha ja vem compilados no firmware,
   // via secrets.h. Desligar elimina desgaste de flash no cenario em que o
-  // roteador fica fora do ar e o dispositivo reinicia a cada ~40s
+  // roteador fica fora do ar e o dispositivo reinicia a cada ~3min10s
   // indefinidamente (ver garantirWiFi). De quebra, deixa de existir uma
   // segunda copia da senha fora do binario.
   //
@@ -1029,9 +1287,9 @@ void loop() {
         Serial.print("Subiu depois de ");
         Serial.print(tentativasWol);
         Serial.println(" tentativa(s) de Wake-on-LAN.");
-        registrar("%s ONLINE apos %d tentativa(s) de WoL", ALVO_NOME, tentativasWol);
+        registrar(FMT_ALVO_SUBIU, ALVO_NOME, tentativasWol);
       } else {
-        registrar("%s ONLINE (ja estava ligado no boot)", ALVO_NOME);
+        registrar(FMT_ALVO_JA_ESTAVA, ALVO_NOME);
       }
       estado = ONLINE;
       estadoDesde = millis();
@@ -1049,12 +1307,12 @@ void loop() {
   // Nao respondeu: tratar como desligado e acordar.
   Serial.println("SEM RESPOSTA.");
   if (estado != OFFLINE) {
-    registrar("%s parou de responder", ALVO_NOME);
+    registrar(FMT_ALVO_SEM_RESPOSTA, ALVO_NOME);
     estadoDesde = millis();
   }
   estado = OFFLINE;
   tentativasWol++;
-  totalWolDesdeBoot++;
+  wolTotalDoAlvo++;
 
   Serial.print("Enviando Wake-on-LAN (tentativa ");
   Serial.print(tentativasWol);

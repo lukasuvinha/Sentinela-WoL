@@ -240,28 +240,71 @@ sentinela parar de vigiar porque o servidor web dela travou o aparelho.
 
 ### O que ela mostra
 
+Os blocos da página vêm **nesta ordem**, e a ordem tem uma razão: a
+máquina vigiada é a pergunta que traz alguém até ali; as ocorrências
+explicam o que aconteceu com ela; o aparelho vem por último, porque quem
+olha o próprio firmware não está com pressa.
+
+```
+Sentinela Wake-on-LAN
+
+┌─ cartão da máquina ──────────────────┐
+│ servidor                             │  <- nome, cor neutra
+│ ONLINE                               │  <- estado, colorido
+│ há 4h 12min                          │
+│                                      │
+│ IP                    192.168.X.Y    │
+│ MAC                   AA:BB:...      │
+│ Última verificação    há 2min        │
+│ Próxima em            3min           │
+│ WoL desde a última subida     0      │
+│ WoL desde o boot              1      │
+└──────────────────────────────────────┘
+
+OCORRÊNCIAS
+  ...
+
+ESP32
+  Firmware / Ligado há / IP / Reinícios
+```
+
+**O cartão é a unidade que se repete.** Tudo que é de uma máquina está
+dentro dele — nome, estado, endereço e os contadores dela — e nada do
+aparelho. Quando o projeto passar a acordar mais de uma, só esse bloco
+cresce, por repetição, e o resto da página fica igual. No `main.cpp` ele
+já é uma função separada (`emitirBlocoMaquina()`) chamada uma única vez,
+que é o ponto exato onde entra o laço.
+
 | Bloco | Campo | O que é |
 |---|---|---|
-| topo | Estado e "há ..." | `ONLINE`, `OFFLINE` ou `verificando`, e há quanto tempo está assim. Conta desde a última **transição**, não desde o boot. |
-| Verificação | Última | Há quanto tempo foi o último ping. |
-| Verificação | Próxima&nbsp;em | Quanto falta para a próxima. Mostra `agora` quando o ciclo já deveria ter acontecido — o aparelho está no meio de uma checagem. |
-| Verificação | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
-| Verificação | WoL desde o boot | Total acumulado desde que o ESP32 ligou. Não zera. |
+| Máquina | Nome | Vem do `SECRET_ALVO_NOME`. Em cor neutra, e não junto do estado: pintar o nome de verde faria parecer que ele faz parte do estado. |
+| Máquina | Estado e "há ..." | `ONLINE`, `OFFLINE` ou `verificando`, colorido, e há quanto tempo está assim. Conta desde a última **transição**, não desde o boot. |
+| Máquina | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
+| Máquina | Última verificação | Há quanto tempo foi o último ping. |
+| Máquina | Próxima&nbsp;em | Quanto falta para a próxima. Mostra `agora` quando o ciclo já deveria ter acontecido — o aparelho está no meio de uma checagem. |
+| Máquina | WoL desde a última subida | Magic packets enviados desde a última vez que o alvo respondeu. Zera quando ele sobe. |
+| Máquina | WoL total desde o boot do ESP32 | Total acumulado de magic packets enviados a **esta máquina**. Não zera. O rótulo diz "do ESP32" de propósito: o contador vive na RAM do aparelho, então é o boot dele que o zera — não o da máquina vigiada. |
+| Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. Vale para todas as máquinas. |
 | ESP32 | Firmware | A versão editada a mão e o momento da compilação. Ver "Carimbo de versão". |
 | ESP32 | Ligado&nbsp;há | Tempo desde o último boot. Ver a ressalva do reinício periódico (24 h no padrão), adiante. |
-| ESP32 | Heap&nbsp;livre | Memória livre **neste instante**. |
-| ESP32 | Mínimo desde o boot | **O pior momento de memória livre, não o valor atual.** Ver abaixo. |
-| ESP32 | IP&nbsp;/&nbsp;MAC | Do próprio ESP32, lidos da pilha de rede — o que ele de fato está usando. |
+| ESP32 | IP | Do próprio ESP32, lido da pilha de rede — o que ele de fato está usando. |
 | ESP32 | Reinícios | Quantos desde a última queda de energia, e o motivo do último. |
-| Alvo | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
-| Ocorrências | lista | Até 20 eventos, do mais recente para o mais antigo. |
 
-**"Mínimo desde o boot" merece atenção** porque é fácil ler errado. Não é
-a leitura atual: é o menor valor que o heap livre já atingiu desde que o
-aparelho ligou (`ESP.getMinFreeHeap()`). Ele só desce, nunca sobe. É ele
-que responde a pergunta que importa — "em algum momento chegou perto do
-fim?". O "Heap livre" da linha de cima pode estar confortável agora e ter
-havido um aperto há seis horas; só o mínimo mostra isso.
+**Três campos foram retirados desta tela**: o heap livre, o mínimo desde
+o boot, e o MAC do próprio ESP32. A página existe para responder "o
+servidor está no ar?", e medida de memória não pertence a essa pergunta.
+
+Nada disso se perdeu de vista:
+
+- o **heap livre** continua saindo na serial a cada ciclo, em
+  `Verificando o <alvo> (heap livre: N bytes)...`, que é onde ele serve —
+  acompanhado ao longo do tempo, não espiado num instante;
+- o **MAC do ESP32** continua no banner de boot, que é onde alguém procura
+  quando vai criar reserva de DHCP no roteador.
+
+No `main.cpp` o código dos três está **comentado, não apagado**, junto de
+uma nota de como reativar. O mínimo desde o boot (`ESP.getMinFreeHeap()`)
+é o único que deixa de aparecer em qualquer canal.
 
 ### Atualização automática
 
@@ -487,8 +530,8 @@ para responder "o que aconteceu de diferente", e uma lista de vinte
 
 ### As categorias de ocorrência
 
-O firmware registra seis categorias de evento. A lista abaixo é **das
-categorias**, não das mensagens: o texto exato de cada ocorrência não é
+O firmware registra as categorias de evento da tabela abaixo. A lista é
+**das categorias**, não das mensagens: o texto exato de cada ocorrência não é
 transcrito aqui de propósito.
 
 | Categoria | Quando entra |
@@ -548,11 +591,16 @@ um power-on a região vem com qualquer conteúdo, e sem essa checagem o
 firmware anunciaria um número aleatório de reinícios com um motivo
 ilegível.
 
-Os motivos possíveis hoje são cinco:
+Os motivos possíveis são os da tabela abaixo.
+
+<!-- Não escreva a quantidade aqui nem em nenhuma outra frase deste
+     arquivo. Número contado à mão ao lado da tabela que o contém é o
+     mesmo padrão do "24h" e do "10s": diverge na próxima linha que
+     alguém acrescentar, e ninguém percebe. A tabela é a fonte. -->
 
 | Motivo | Origem |
 |---|---|
-| `Wi-Fi nao conectou dentro do prazo` | 30 s sem conectar, em `garantirWiFi()`. |
+| `Wi-Fi nao conectou dentro do prazo` | 3 min sem conectar, em `garantirWiFi()`. |
 | `falha ao criar a sessao de ping` | `esp_ping_new_session()` recusou. |
 | `falha ao iniciar a sessao de ping` | `esp_ping_start()` recusou. |
 | `ping sem retorno dentro do prazo` | O callback do ping nunca veio. |
@@ -826,7 +874,7 @@ Subiu depois de 1 tentativa(s) de Wake-on-LAN.
 -->
 
 
-Se o Wi-Fi não conectar em 30 segundos, o firmware desiste, explica o
+Se o Wi-Fi não conectar em **3 minutos**, o firmware desiste, explica o
 motivo provável e reinicia sozinho para tentar de novo:
 
 ```
@@ -847,7 +895,7 @@ Reiniciando em 10s para tentar de novo...
 | `MAC do ESP32: <mac>` | Só no boot. O MAC do próprio aparelho, para reserva de DHCP no roteador e para identificá-lo na lista de clientes. |
 | `Pagina de status: http://<ip>` | Só no boot, **depois** de a rede existir. O endereço vem de `WiFi.localIP()`, então é o real nos dois modos. |
 | `Reinicios desde a ultima queda de energia: <n>` | Só no boot, e só se houve reinício. Vem da RTC RAM; zera quando falta energia. |
-| `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos cinco motivos da tabela da seção de histórico. |
+| `Motivo do ultimo: <texto>` | Acompanha a linha acima. Um dos motivos da tabela da seção de histórico. |
 | `Reinicio periodico de higiene (<tempo> de funcionamento).` | O reinício programado. O `<tempo>` é montado a partir de `REINICIO_PERIODICO_MS`, então acompanha a constante. **Não é defeito** — é a defesa cega descrita na seção própria. Esperado uma vez por dia. |
 | `[erro] nenhum magic packet saiu. Problema de rede no ESP32.` | O `sendto()` falhou nas três tentativas. Não é o alvo: é a pilha de rede do próprio ESP32. Costuma vir junto de instabilidade de Wi-Fi. |
 
@@ -866,10 +914,10 @@ culpando o alvo por um defeito local. Ver `alvoResponde()`.
 ### Erro de compilação esperado
 
 Se algum campo do `secrets.h` não estiver utilizável, o build **falha de
-propósito**, antes de gerar firmware. São **quinze travas**, duas por
-campo de texto e duas por campo numérico — uma pega o descuido de não
-editar, outra o de editar errado. A máscara é a única com uma só, pelo
-motivo explicado na seção de configuração.
+propósito**, antes de gerar firmware. O padrão é **duas por campo** —
+uma pega o descuido de não editar, outra o de editar errado. A máscara
+tem só a segunda, pelo motivo explicado na seção de configuração, e o
+nome do alvo tem uma terceira, de tamanho, explicada adiante.
 
 As mensagens saem sem acento porque vêm do compilador, e são exatamente
 estas:
@@ -882,6 +930,7 @@ estas:
 | Apagou a senha e deixou `""` | `SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.` |
 | Idem, nome do alvo | `Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.` |
 | Apagou o nome do alvo e deixou `""` | `SECRET_ALVO_NOME esta vazio em src/secrets.h.` |
+| Nome do alvo com mais de 18 caracteres | `SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. Acima disso a ocorrencia do historico e truncada em silencio. Escolha um nome mais curto em src/secrets.h.` |
 | MAC do alvo com número de bytes errado — cinco, sete | `SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.` |
 | MAC do alvo ainda no valor do template | `SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.` |
 | IP do alvo com número de octetos errado | `SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
@@ -913,13 +962,45 @@ comentar o `static_assert` correspondente no `main.cpp` — há um
 comentário no lugar explicando. Vale lembrar que rede aberta é escolha
 ruim para um aparelho que fica ligado permanentemente.
 
-#### A décima sexta trava, de natureza diferente
+#### O teto de 18 caracteres do nome, e a conta que o produz
 
-Existe mais um `static_assert` no `main.cpp`, e ele **não** tem relação
-com o `secrets.h`. Não é campo que o usuário preenche: é um teto de
-projeto sobre `REINICIO_PERIODICO_MS`, a constante do reinício de
-higiene. Só aparece para quem alterar aquele valor no código — quem
-apenas instala a sentinela nunca vai vê-lo.
+Esta é a única trava cujo limite não é óbvio, então vale o raciocínio. O
+nome do alvo desemboca no buffer mais apertado do projeto: cada entrada do
+histórico é um `char[56]`, e o `snprintf` que a preenche **trunca em
+silêncio** — no canal que existe justamente para contar o que aconteceu.
+
+A conta sai dos três formatos que usam o nome. Úteis são 55 caracteres,
+porque o `snprintf` reserva o terminador:
+
+| Formato da ocorrência | Literal | Teto do nome |
+|---|---|---|
+| `%s parou de responder` | 19 | 36 |
+| `%s ONLINE (ja estava ligado no boot)` | 34 | 21 |
+| `%s ONLINE apos %d tentativa(s) de WoL` | 33 | 21 − dígitos |
+
+O terceiro manda, porque o `%d` cresce. Dimensionado para **4 dígitos**:
+`55 − 33 − 4 = 18`. Quatro dígitos são 9999 tentativas, e como as
+retentativas ficam espaçadas de 5 min depois das três primeiras, isso é
+mais de um mês de alvo fora do ar — a essa altura o problema não é o texto
+da ocorrência.
+
+Se estourar mesmo assim, o dano é limitado: o `%s` vem **primeiro** no
+formato, então o nome nunca é a parte cortada — quem perde o fim é a
+mensagem.
+
+**Quem mexer no texto das ocorrências precisa refazer esta conta.** E se
+mudar o `HISTORICO_TEXTO`, um segundo `static_assert` para o build e manda
+refazê-la.
+
+#### As travas de natureza diferente
+
+Existem outros `static_assert` no `main.cpp`, e nenhum deles tem
+relação com o `secrets.h`. Não são campos que o usuário preenche: são
+tetos de projeto, e **só aparecem para quem alterar aqueles valores no
+código** — quem apenas instala a sentinela nunca vai vê-los.
+
+**A primeira** é um teto sobre `REINICIO_PERIODICO_MS`, a constante do
+reinício de higiene.
 
 ```
 REINICIO_PERIODICO_MS perto demais do estouro de millis() (~49,7 dias). Acima de ~40 dias a comparacao direta do loop() deixa de valer: troque por (millis() - referencia) > REINICIO_PERIODICO_MS, guardando a referencia do boot numa variavel.
@@ -930,6 +1011,57 @@ direta (`millis() > REINICIO_PERIODICO_MS`) e só vale porque a referência
 é o boot e 24 h está longe do estouro de ~49,7 dias. O teto de 40 dias
 existe para que aumentar a constante além disso pare o build, em vez de
 produzir um aparelho que reinicia na hora errada meses depois.
+
+**A segunda** guarda a conta do teto de 18 caracteres do nome, explicada
+acima. O teto foi calculado a partir do `HISTORICO_TEXTO`, mas os dois
+ficam longe um do outro no arquivo — então um espelho ligado por
+`static_assert` impede que se separem:
+
+```
+HISTORICO_TEXTO mudou. Refaca a conta do ALVO_NOME_MAX, que dimensiona o nome do alvo a partir deste tamanho.
+```
+
+Sem ela, aumentar o histórico deixaria o teto do nome apertado à toa, e
+**diminuí-lo traria de volta o truncamento silencioso** que a trava do
+nome existe para impedir — sem nenhum aviso, porque a conta vive num
+comentário e comentário não compila.
+
+**As três últimas** fecham a outra metade do mesmo problema, e são as mais
+importantes do conjunto. O teto do nome depende de duas coisas: o
+`HISTORICO_TEXTO`, protegido pelo espelho acima, e o **texto literal das
+mensagens de ocorrência** — e essa segunda metade é a que muda. Ninguém
+redimensiona buffer por acaso; todo mundo ajusta mensagem.
+
+Os três formatos que usam o nome viraram constantes nomeadas
+(`FMT_ALVO_SUBIU`, `FMT_ALVO_JA_ESTAVA`, `FMT_ALVO_SEM_RESPOSTA`) por um
+motivo único: **assim o compilador consegue medi-los**. Cada um tem um
+`static_assert` que calcula o pior caso a partir do próprio literal —
+tamanho do formato, menos os especificadores, mais `ALVO_NOME_MAX`, mais
+os dígitos reservados — e confere contra o `HISTORICO_TEXTO`:
+
+```
+O texto de '%s ONLINE apos %d tentativa(s) de WoL' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+O texto de '%s ONLINE (ja estava ligado no boot)' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+O texto de '%s parou de responder' cresceu e nao cabe mais no historico com um nome de ALVO_NOME_MAX caracteres. Encurte a mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.
+```
+
+A folga de cada um é diferente, e vale conhecer antes de mexer:
+
+| Formato | Pior caso | Folga |
+|---|---|---|
+| `%s ONLINE apos %d tentativa(s) de WoL` | 55 | **0** |
+| `%s ONLINE (ja estava ligado no boot)` | 52 | 3 |
+| `%s parou de responder` | 37 | 18 |
+
+O primeiro tem folga **zero** — é dele que o teto de 18 foi derivado, então
+**um único caractere a mais para o build**. Verificado na bancada: com +0
+compila, com +1 para; no segundo, +3 compila e +4 para.
+
+Não é rigor gratuito. Com os nomes reais do parque, de 10 caracteres ou
+menos, sobram 8 de folga — e essa folga não corre risco por causa de um
+nome novo, corre risco porque **alguém vai querer deixar uma mensagem mais
+clara**. É o tipo de mudança que este projeto faz toda semana, e que já o
+mordeu três vezes: o `24h`, o `10s`, e as duas derivas do README.
 
 ### 4. Verificar que o alvo acordou
 
@@ -1018,7 +1150,7 @@ patamar.
 ### 5. Wi-Fi
 
 Rede 2.4 GHz e sinal suficiente no local onde o ESP32 vai ficar. O
-firmware avisa explicitamente se não conectar em 30 s.
+firmware avisa explicitamente se não conectar em 3 min.
 
 ### Já verificado, não precisa observar
 
@@ -1050,8 +1182,8 @@ mais tarde.
 ### Retentar o Wi-Fi sem reiniciar
 
 **Propósito.** Se o roteador ficar fora do ar por muito tempo, o
-`ESP.restart()` do `garantirWiFi()` vira um ciclo de reboot a cada ~40 s
-(30 s de timeout + 10 s de espera), indefinidamente. A alternativa seria
+`ESP.restart()` do `garantirWiFi()` vira um ciclo de reboot a cada
+~3min10s (3 min de timeout + 10 s de espera), indefinidamente. A alternativa seria
 insistir no Wi-Fi no próprio laço, sem nunca reiniciar.
 
 **Solução proposta.** Trocar `println` + `delay` + `ESP.restart()` por um
@@ -1166,7 +1298,7 @@ recuperação escolhido.
   teste, a ausência de trava de valor nela seria afirmação não
   verificada.
 - **Caminho único de reinício.** Não existe `ESP.restart()` solto no
-  `main.cpp`: os cinco motivos passam por `reiniciar()`, que grava o
+  `main.cpp`: todos os motivos passam por `reiniciar()`, que grava o
   texto em RTC RAM antes de reiniciar. Conferido por varredura no
   arquivo.
 - **Nenhuma constante órfã.** Os 30 nomes de constante e variável global
