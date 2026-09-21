@@ -20,21 +20,28 @@
 #define SECRET_WIFI_PASSWORD "PREENCHER_SENHA_AQUI"
 
 // --- Alvo ---
-// Nome da maquina vigiada, usado nas mensagens da serial e na pagina de
-// status. E texto, entao tem trava de compilacao como os campos de Wi-Fi.
-#define SECRET_ALVO_NOME     "PREENCHER_NOME_DO_ALVO"
-
-// Os dois campos abaixo tambem tem trava: o build confere a quantidade
-// de bytes e rejeita os valores de exemplo. Um MAC com cinco bytes ou um
-// IP esquecido no valor do template nao chegam a virar firmware.
-
-// MAC da interface CABEADA do alvo (nao e o MAC do ESP32).
-// Linux: ip link   |   Windows: ipconfig /all
-#define SECRET_ALVO_MAC      0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF
-
-// IP fixo do alvo, alvo do ping. Precisa ser fixo: com DHCP o endereco
-// muda e a sentinela passa a pingar outra maquina, ou nenhuma.
-#define SECRET_ALVO_IP       192, 168, 1, 100
+// A lista de maquinas vigiadas. Uma linha por maquina:
+//
+//     { nome, Ipv4(...), Mac(...), tempo_de_boot_em_segundos }
+//
+// - nome: aparece na serial e na pagina. Ate 18 caracteres.
+// - Ipv4: IP fixo da maquina. Precisa ser fixo - com DHCP o endereco
+//   muda e a sentinela passa a pingar outra maquina, ou nenhuma.
+// - Mac: da interface CABEADA do alvo, nao do ESP32. E o endereco para
+//   onde o magic packet vai.
+//   Windows: ipconfig /all   |   Linux: ip link
+// - tempo de boot: quanto a maquina leva para responder ao ping depois
+//   de acordar, em segundos. Entre 10 e 600.
+//
+// As barras invertidas no fim de cada linha sao obrigatorias: isto e uma
+// macro, e sem elas a definicao termina na primeira quebra de linha.
+//
+// NESTA VERSAO A LISTA ACEITA UMA MAQUINA SO. Varias entram numa etapa
+// futura; por enquanto o build para se houver mais de uma, para que
+// nenhuma seja ignorada em silencio.
+#define SECRET_ALVOS { \
+  { "PREENCHER_NOME_DO_ALVO", Ipv4(192, 168, 1, 100), Mac(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF), 90 }, \
+}
 
 // --- Endereco do proprio ESP32 ---
 

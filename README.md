@@ -101,7 +101,7 @@ O que cada arquivo do `src/` faz:
 
 | Arquivo | Papel |
 |---|---|
-| `main.cpp` | Firmware. Lê do `secrets.h` os **oito** campos da instalação: as duas credenciais de Wi-Fi, os três do alvo (`SECRET_ALVO_NOME`, `SECRET_ALVO_MAC`, `SECRET_ALVO_IP`) e os três de endereço do próprio ESP32 (`SECRET_ESP32_IP`, `SECRET_GATEWAY_IP`, `SECRET_MASCARA_REDE`). |
+| `main.cpp` | Firmware. Lê do `secrets.h` a lista de máquinas vigiadas (`SECRET_ALVOS`), as duas credenciais de Wi-Fi e os três de endereço do próprio ESP32 (`SECRET_ESP32_IP`, `SECRET_GATEWAY_IP`, `SECRET_MASCARA_REDE`). |
 | `secrets.example.h` | Template publicável. Contém os placeholders `PREENCHER_*`, nunca valores reais. Serve de referência para quem clonar o repo. |
 | `secrets.h` | Dados reais: rede Wi-Fi, alvo e endereço do próprio ESP32. Está no `.gitignore`. Se não existir, criar com `cp src/secrets.example.h src/secrets.h`. |
 
@@ -113,7 +113,7 @@ O que cada arquivo do `src/` faz:
 `src/main.cpp` nunca precisa ser editado para instalar a sentinela em
 outra rede ou apontar para outra máquina.**
 
-São oito campos. Copie o template e preencha:
+Copie o template e preencha:
 
 ```bash
 cp src/secrets.example.h src/secrets.h
@@ -124,12 +124,112 @@ $EDITOR src/secrets.h
 |---|---|---|---|
 | `SECRET_WIFI_SSID` | Nome da rede Wi-Fi. Precisa ser **2.4 GHz** — o ESP32 não fala 5 GHz. | Lista de redes do celular. Se o roteador anuncia o mesmo nome nas duas bandas, confirmar que a 2.4 está ativa. | sim |
 | `SECRET_WIFI_PASSWORD` | Senha da rede. | — | sim |
-| `SECRET_ALVO_NOME` | Nome da máquina vigiada. Só aparece nas mensagens da serial e na página. | Escolha sua. | sim |
-| `SECRET_ALVO_MAC` | MAC da interface **cabeada** do alvo. É o endereço que o magic packet acorda. | No alvo: `ip link` (Linux) ou `ipconfig /all` (Windows). | sim |
-| `SECRET_ALVO_IP` | IP do alvo. É quem o ping consulta. Precisa ser fixo. | No alvo: `ip addr`. | sim |
+| `SECRET_ALVOS` | A **lista** de máquinas vigiadas. Formato descrito abaixo. | — | sim |
 | `SECRET_ESP32_IP` | IP que o próprio ESP32 assume. Precisa estar **fora da faixa de DHCP** do roteador. | Painel do roteador, na configuração de DHCP. | sim |
 | `SECRET_GATEWAY_IP` | Endereço do roteador. Serve de gateway e de DNS. | `ip route \| grep default` | sim |
 | `SECRET_MASCARA_REDE` | Máscara da rede local. | Quase sempre `255, 255, 255, 0`. | **só quantidade** |
+
+### O formato da lista de alvos
+
+`SECRET_ALVOS` é uma lista, com uma linha por máquina:
+
+```c
+#define SECRET_ALVOS { \
+  { "servidor", Ipv4(192, 168, 1, 100), Mac(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF), 90 }, \
+}
+```
+
+| Campo | O que é |
+|---|---|
+| nome | Aparece na serial e na página. Até 18 caracteres — o teto vem do tamanho da entrada do histórico, explicado na seção das travas. |
+| `Ipv4(...)` | IP da máquina, quatro octetos separados. É quem o ping consulta, e precisa ser fixo. |
+| `Mac(...)` | MAC da interface **cabeada** do alvo, seis bytes. É o endereço que o magic packet acorda — não é o MAC do ESP32. |
+| tempo de boot | Quantos **segundos** a máquina leva para responder ao ping depois de acordar. Entre 10 e 600. |
+
+**As barras invertidas no fim de cada linha são obrigatórias.** Isto é uma
+macro, e sem elas a definição termina na primeira quebra de linha. É o
+único custo estético do formato, e não há como evitá-lo sem trazer um
+sistema de arquivos para dentro do firmware.
+
+#### Por que `Ipv4(...)` e `Mac(...)`, e não listas de números
+
+Porque uma lista de números aceita a quantidade errada **em silêncio**.
+Escrever `{192, 168, 1}` num vetor de quatro preenche o que falta com
+zero: o alvo vira `192.168.1.0`, o firmware compila, grava, roda, e fica
+pingando um endereço que não existe — sem uma única mensagem em lugar
+nenhum.
+
+`Ipv4` e `Mac` são structs cujo construtor **exige** quatro e seis
+argumentos. Faltar um é erro de compilação, com o número da linha. A
+verificação de tamanho deixou de ser uma trava e virou propriedade do
+tipo.
+
+Eles guardam `int`, e não `uint8_t`, também de propósito: com `uint8_t` o
+valor `256` chegaria já truncado para `0`, e a trava de faixa não teria o
+que reclamar — ela veria um zero legítimo. Guardando `int`, o valor chega
+inteiro e a mensagem pode dizer que está fora de 0..255. A conversão
+acontece no uso.
+
+#### Nesta versão a lista aceita uma máquina só
+
+O firmware vigia uma máquina, e o build **para** se a lista tiver mais de
+uma. A trava é temporária e sai quando o escalonador existir. Ela está aí
+porque, sem ela, a segunda máquina seria **ignorada em silêncio**: a
+página mostraria uma, o ping olharia uma, e nada no aparelho diria que a
+outra existe. É o tipo de falha que só aparece no dia em que a máquina
+esquecida não acorda.
+
+### Migrar da 1.x
+
+O `secrets.h` da 1.x tinha três campos soltos para o alvo, e o tempo de
+boot era uma constante do `main.cpp`. Os quatro viraram uma linha da
+lista. **Os outros cinco campos não mudaram**: as duas credenciais de
+Wi-Fi e os três de endereço do próprio ESP32 ficam exatamente como estão.
+
+Antes:
+
+```c
+#define SECRET_ALVO_NOME     "servidor"
+#define SECRET_ALVO_MAC      0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF
+#define SECRET_ALVO_IP       192, 168, 1, 100
+```
+
+Depois:
+
+```c
+#define SECRET_ALVOS { \
+  { "servidor", Ipv4(192, 168, 1, 100), Mac(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF), 90 }, \
+}
+```
+
+O `90` no fim é o tempo de boot em segundos. Na 1.x ele era o
+`ESPERA_POS_WOL_MS` do `main.cpp`, igual para todo mundo; agora é coluna
+da lista, porque é característica da máquina e não do projeto — um NAS
+sobe em 40 s e um servidor grande leva três minutos. **Quem está migrando
+e não quer pensar nisso pode manter `90`, que era o valor da 1.x.**
+
+Repare que a ordem mudou: o MAC vinha antes do IP nos `#define`, e na
+lista o IP vem antes do MAC. Não há como trocar um pelo outro por
+descuido — `Ipv4` e `Mac` são tipos diferentes, e inverter os dois não
+compila.
+
+**Não é preciso decorar nada disso.** Se o `secrets.h` ficar no formato
+antigo, o build para com uma linha só:
+
+```
+error: #error "secrets.h esta no formato 1.x: troque SECRET_ALVO_NOME/MAC/IP pela lista SECRET_ALVOS. Veja a secao 'Migrar da 1.x' no README."
+```
+
+E se faltar a lista inteira, com esta:
+
+```
+error: #error "SECRET_ALVOS nao esta definido: copie src/secrets.example.h para src/secrets.h e preencha. Veja a secao 'Configuracao' no README."
+```
+
+As duas são excludentes de propósito, e cada uma vem acompanhada de uma
+lista de emergência interna que existe só para o compilador não despejar
+uma dúzia de erros sobre símbolos que não existem, enterrando a linha que
+interessa.
 
 ### Por que a máscara é a única sem trava de valor
 
@@ -175,19 +275,21 @@ Constantes no topo do `main.cpp`:
 | Constante | Valor | Papel |
 |---|---|---|
 | `INTERVALO_MONITORAMENTO_MS` | 5&nbsp;min | Espera entre checagens com o alvo no ar. |
-| `ESPERA_POS_WOL_MS` | 90&nbsp;s | Tempo dado ao alvo para subir a rede depois do WoL. No caso do projeto, um Ubuntu Server em disco mecânico. |
+| tempo de boot | por máquina | Tempo dado ao alvo para subir a rede depois do WoL. **Não é constante do `main.cpp`**: é o quarto campo de cada entrada em `SECRET_ALVOS`. Ver "O formato da lista de alvos". |
 | `INTERVALO_RETENTATIVA_MS` | 5&nbsp;min | Espera entre WoL depois das tentativas rápidas. |
-| `TENTATIVAS_RAPIDAS` | 3 | Quantos WoL a 90 s antes de espaçar para 5 min. |
+| `TENTATIVAS_RAPIDAS` | 3 | Quantos WoL no ritmo do tempo de boot antes de espaçar para 5 min. |
 | `PINGS_POR_CHECAGEM` | 3 | Basta 1 resposta para considerar online. |
 
 O escalonamento existe para não martelar a rede quando o alvo está
 fisicamente fora da tomada. Ele nunca desiste — só passa a insistir mais
 devagar.
 
-Se o alvo demorar mais de 90 s para responder ao ping depois de
-ligar, o firmware manda um WoL a mais sem necessidade. Isso é inofensivo
-(magic packet em máquina ligada não faz nada), mas se incomodar, aumentar
-`ESPERA_POS_WOL_MS`.
+Se a máquina demorar mais do que o tempo de boot declarado para responder
+ao ping depois de ligar, o firmware manda um WoL a mais sem necessidade.
+Isso é inofensivo — magic packet em máquina ligada não faz nada —, mas se
+incomodar, **aumente o tempo de boot daquela entrada** em `SECRET_ALVOS`,
+não uma constante do `main.cpp`. O valor é por máquina justamente porque
+um NAS sobe em 40 s e um servidor grande leva três minutos.
 
 ### Broadcast
 
@@ -277,7 +379,7 @@ que é o ponto exato onde entra o laço.
 
 | Bloco | Campo | O que é |
 |---|---|---|
-| Máquina | Nome | Vem do `SECRET_ALVO_NOME`. Em cor neutra, e não junto do estado: pintar o nome de verde faria parecer que ele faz parte do estado. |
+| Máquina | Nome | Vem do campo **nome** da entrada em `SECRET_ALVOS`. Em cor neutra, e não junto do estado: pintar o nome de verde faria parecer que ele faz parte do estado. |
 | Máquina | Estado e "há ..." | `ONLINE`, `OFFLINE` ou `verificando`, colorido, e há quanto tempo está assim. Conta desde a última **transição**, não desde o boot. |
 | Máquina | IP&nbsp;/&nbsp;MAC | Os valores compilados, vindos do `secrets.h`. Serve para conferir na hora se o firmware gravado é o que se pensa que é. |
 | Máquina | Última verificação | Há quanto tempo foi o último ping. |
@@ -780,9 +882,8 @@ upload (quando aparece `Connecting....`), soltando depois.
 
 Referência de tamanho de um build limpo (esp32dev, 4 MB flash):
 RAM 14,3% (46.776 B), Flash 60,1% (787.193 B).
-
-Nos exemplos abaixo o `SECRET_ALVO_NOME` está preenchido com
-`servidor`, e MAC e IP aparecem como placeholders.
+Nos exemplos abaixo o campo **nome** da entrada em `SECRET_ALVOS` está
+preenchido com `servidor`, e MAC e IP aparecem como placeholders.
 
 Com o alvo já ligado, a serial mostra:
 
@@ -922,19 +1023,32 @@ nome do alvo tem uma terceira, de tamanho, explicada adiante.
 As mensagens saem sem acento porque vêm do compilador, e são exatamente
 estas:
 
+Duas conferências que existiam na 1.x **não estão nesta tabela**, e não é
+esquecimento: o número de octetos do IP e de bytes do MAC do alvo deixou
+de ser `static_assert` e virou propriedade do tipo. `Ipv4` e `Mac` exigem
+quatro e seis argumentos no construtor, então faltar um produz o erro do
+próprio compilador (`no matching function for call to 'Ipv4::Ipv4(int, int, int)'`)
+com o número da linha, antes de qualquer trava rodar.
+
 | Situação | Mensagem |
 |---|---|
 | Copiou o template e não editou o SSID | `Preencha SECRET_WIFI_SSID em src/secrets.h antes de compilar.` |
 | Apagou o SSID e deixou `""` | `SECRET_WIFI_SSID esta vazio em src/secrets.h. Nao existe rede sem nome.` |
 | Idem, campo da senha | `Preencha SECRET_WIFI_PASSWORD em src/secrets.h antes de compilar.` |
 | Apagou a senha e deixou `""` | `SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.` |
-| Idem, nome do alvo | `Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.` |
-| Apagou o nome do alvo e deixou `""` | `SECRET_ALVO_NOME esta vazio em src/secrets.h.` |
-| Nome do alvo com mais de 18 caracteres | `SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. Acima disso a ocorrencia do historico e truncada em silencio. Escolha um nome mais curto em src/secrets.h.` |
-| MAC do alvo com número de bytes errado — cinco, sete | `SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.` |
-| MAC do alvo ainda no valor do template | `SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.` |
-| IP do alvo com número de octetos errado | `SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
-| IP do alvo ainda no valor do template | `SECRET_ALVO_IP ainda e o exemplo. Troque em src/secrets.h pelo IP real do alvo.` |
+| Nome de um alvo ainda no valor do template | `Um dos nomes em SECRET_ALVOS ainda e o do template. Preencha em src/secrets.h.` |
+| Nome de um alvo vazio | `Um dos nomes em SECRET_ALVOS esta vazio. Todo alvo precisa de nome em src/secrets.h.` |
+| Nome de um alvo com mais de 18 caracteres | `Um dos nomes em SECRET_ALVOS passa de 18 caracteres. Acima disso a ocorrencia do historico e truncada em silencio. Encurte o nome em src/secrets.h.` |
+| Dois alvos com o mesmo nome | `Dois alvos em SECRET_ALVOS tem o mesmo nome. Os nomes aparecem na pagina e no historico, e iguais tornam impossivel saber de qual maquina se fala.` |
+| Dois alvos com o mesmo IP | `Dois alvos em SECRET_ALVOS tem o mesmo IP. Confira os enderecos em src/secrets.h.` |
+| Dois alvos com o mesmo MAC | `Dois alvos em SECRET_ALVOS tem o mesmo MAC. Confira os enderecos em src/secrets.h.` |
+| Octeto de IP fora de 0..255 | `Um octeto de IP em SECRET_ALVOS esta fora de 0..255. Confira em src/secrets.h.` |
+| Byte de MAC fora de 0..255 | `Um byte de MAC em SECRET_ALVOS esta fora de 0..255. Confira em src/secrets.h.` |
+| Tempo de boot fora de 10..600 s | `Um tempo de boot em SECRET_ALVOS esta fora de 10..600 s. E o tempo que a maquina leva para responder ao ping depois do Wake-on-LAN.` |
+| IP de um alvo ainda no valor do exemplo | `Um IP em SECRET_ALVOS ainda e o do exemplo. Troque em src/secrets.h pelo IP real do alvo.` |
+| MAC de um alvo ainda no valor do exemplo | `Um MAC em SECRET_ALVOS ainda e o do exemplo. Troque em src/secrets.h pelo MAC real do alvo.` |
+| Mais alvos do que o teto do projeto | `SECRET_ALVOS tem mais alvos do que o teto do projeto. Veja TETO_DE_ALVOS no main.cpp.` |
+| Mais de um alvo na lista (temporária) | `SECRET_ALVOS ainda aceita um alvo so: o firmware desta etapa vigia uma maquina. A lista com varias entra na etapa 3.` |
 | IP do ESP32 com número de octetos errado | `SECRET_ESP32_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
 | IP do ESP32 ainda no valor do template | `SECRET_ESP32_IP ainda e o exemplo. Escolha em src/secrets.h um IP livre, fora da faixa de DHCP do roteador.` |
 | Gateway com número de octetos errado | `SECRET_GATEWAY_IP precisa ter exatamente 4 octetos em src/secrets.h.` |
