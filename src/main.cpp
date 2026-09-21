@@ -25,6 +25,33 @@
 #include <WebServer.h>   // vem no core do ESP32; nao exige lib_deps
 #include "secrets.h"     // credenciais reais - fica fora do git
 
+// ---- Migracao do formato do secrets.h (1.x -> 2.x) -------------------
+// Estas diretivas existem para que um secrets.h no formato antigo produza
+// UMA linha dizendo o que fazer, em vez de uma cascata de erros sobre
+// simbolos que nao existem mais.
+//
+// Sao excludentes de proposito: um secrets.h 1.x tambem nao tem
+// SECRET_ALVOS, e reclamar das duas coisas so afoga a mensagem util.
+#if defined(SECRET_ALVO_MAC)
+#error "secrets.h esta no formato 1.x: troque SECRET_ALVO_NOME/MAC/IP pela lista SECRET_ALVOS. Veja a secao 'Migrar da 1.x' no README."
+#define SECRETS_INUTILIZAVEL
+#elif !defined(SECRET_ALVOS)
+#error "SECRET_ALVOS nao esta definido: copie src/secrets.example.h para src/secrets.h e preencha. Veja a secao 'Configuracao' no README."
+#define SECRETS_INUTILIZAVEL
+#endif
+
+#ifdef SECRETS_INUTILIZAVEL
+// O #error acima JA FALHOU o build - esta lista nunca vira firmware.
+//
+// Ela existe por um motivo so: sem uma SECRET_ALVOS qualquer, o
+// compilador despeja mais uma duzia de erros sobre simbolos que nao
+// existem, e a linha que diz o que fazer fica enterrada no meio deles.
+// Os valores sao escolhidos para passar por todas as travas, para que
+// nem elas gerem ruido.
+#undef SECRET_ALVOS
+#define SECRET_ALVOS { { "migre-o-secrets", Ipv4(10, 0, 0, 1), Mac(0x02, 0, 0, 0, 0, 1), 90 }, }
+#endif
+
 // API de ping nativa do ESP-IDF. Ja vem no liblwip.a do core,
 // nao precisa de biblioteca externa em lib_deps.
 #include "lwip/ip_addr.h"
@@ -358,6 +385,137 @@ static_assert(piorCasoOcorrencia(FMT_ALVO_SEM_RESPOSTA, 0)
               "historico com um nome de ALVO_NOME_MAX caracteres. Encurte a "
               "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
 
+
+// ---- As travas da LISTA de alvos ------------------------------------
+// MAC e IP sao os dois campos que mais precisam de trava: MAC errado nao
+// gera erro nenhum em execucao (o magic packet sai perfeito para um
+// endereco que nao existe) e IP errado faz a sentinela concluir que o
+// alvo vive desligado. Este projeto ja foi vitima desse exato bug - ver o
+// EPISODIO REGISTRADO la em cima.
+//
+// Na v1.0 o tamanho do MAC e do IP era conferido por sizeof do vetor do
+// secrets.h. Agora nao precisa: os construtores de Ipv4 e Mac EXIGEM 4 e
+// 6 argumentos, entao um IP com tres octetos nem chega a compilar - o
+// erro vem do construtor, com o numero da linha. A trava de tamanho
+// deixou de ser um static_assert e virou uma propriedade do tipo.
+//
+// Tudo abaixo e recursivo e de um unico return porque o build usa C++11,
+// onde constexpr nao aceita corpo com declaracoes. Nao e estilo: e o que
+// o padrao permite.
+
+constexpr bool naFaixa(int v, int lo, int hi) { return v >= lo && v <= hi; }
+
+constexpr bool ipNaFaixa(const Ipv4& p, int i) {
+  return i == 4 || (naFaixa(p.o[i], 0, 255) && ipNaFaixa(p, i + 1));
+}
+constexpr bool macNaFaixa(const Mac& m, int i) {
+  return i == 6 || (naFaixa(m.b[i], 0, 255) && macNaFaixa(m, i + 1));
+}
+constexpr bool mesmoIp(const Ipv4& a, const Ipv4& b, int i) {
+  return i == 4 || (a.o[i] == b.o[i] && mesmoIp(a, b, i + 1));
+}
+constexpr bool mesmoMac(const Mac& a, const Mac& b, int i) {
+  return i == 6 || (a.b[i] == b.b[i] && mesmoMac(a, b, i + 1));
+}
+
+// --- varreduras da lista inteira ---
+constexpr bool algumNomePlaceholder(int i) {
+  return i != N_ALVOS && (mesmaString(ALVOS[i].nome, "PREENCHER_NOME_DO_ALVO")
+                          || algumNomePlaceholder(i + 1));
+}
+constexpr bool algumNomeVazio(int i) {
+  return i != N_ALVOS && (vazia(ALVOS[i].nome) || algumNomeVazio(i + 1));
+}
+constexpr bool algumNomeComprido(int i) {
+  return i != N_ALVOS && (comprimento(ALVOS[i].nome) > ALVO_NOME_MAX
+                          || algumNomeComprido(i + 1));
+}
+constexpr bool algumIpForaDaFaixa(int i) {
+  return i != N_ALVOS && (!ipNaFaixa(ALVOS[i].ip, 0) || algumIpForaDaFaixa(i + 1));
+}
+constexpr bool algumMacForaDaFaixa(int i) {
+  return i != N_ALVOS && (!macNaFaixa(ALVOS[i].mac, 0) || algumMacForaDaFaixa(i + 1));
+}
+constexpr bool algumBootForaDaFaixa(int i) {
+  return i != N_ALVOS && (!naFaixa(ALVOS[i].bootSegundos, BOOT_MIN_S, BOOT_MAX_S)
+                          || algumBootForaDaFaixa(i + 1));
+}
+
+// --- repetidos: compara cada entrada com as SEGUINTES, nunca com as
+// anteriores, senao todo par seria contado duas vezes ---
+constexpr bool nomeRepetidoCom(int i, int j) {
+  return j != N_ALVOS && (mesmaString(ALVOS[i].nome, ALVOS[j].nome)
+                          || nomeRepetidoCom(i, j + 1));
+}
+constexpr bool algumNomeRepetido(int i) {
+  return i != N_ALVOS && (nomeRepetidoCom(i, i + 1) || algumNomeRepetido(i + 1));
+}
+constexpr bool ipRepetidoCom(int i, int j) {
+  return j != N_ALVOS && (mesmoIp(ALVOS[i].ip, ALVOS[j].ip, 0)
+                          || ipRepetidoCom(i, j + 1));
+}
+constexpr bool algumIpRepetido(int i) {
+  return i != N_ALVOS && (ipRepetidoCom(i, i + 1) || algumIpRepetido(i + 1));
+}
+constexpr bool macRepetidoCom(int i, int j) {
+  return j != N_ALVOS && (mesmoMac(ALVOS[i].mac, ALVOS[j].mac, 0)
+                          || macRepetidoCom(i, j + 1));
+}
+constexpr bool algumMacRepetido(int i) {
+  return i != N_ALVOS && (macRepetidoCom(i, i + 1) || algumMacRepetido(i + 1));
+}
+
+// --- "copiei o template e esqueci de editar", agora na lista ---
+constexpr Ipv4 IP_EXEMPLO  = Ipv4(192, 168, 1, 100);
+constexpr Mac  MAC_EXEMPLO = Mac(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF);
+constexpr bool algumIpExemplo(int i) {
+  return i != N_ALVOS && (mesmoIp(ALVOS[i].ip, IP_EXEMPLO, 0) || algumIpExemplo(i + 1));
+}
+constexpr bool algumMacExemplo(int i) {
+  return i != N_ALVOS && (mesmoMac(ALVOS[i].mac, MAC_EXEMPLO, 0) || algumMacExemplo(i + 1));
+}
+
+static_assert(!algumNomePlaceholder(0),
+              "Um dos nomes em SECRET_ALVOS ainda e o do template. Preencha em src/secrets.h.");
+static_assert(!algumNomeVazio(0),
+              "Um dos nomes em SECRET_ALVOS esta vazio. Todo alvo precisa de nome em src/secrets.h.");
+static_assert(!algumNomeComprido(0),
+              "Um dos nomes em SECRET_ALVOS passa de 18 caracteres. Acima disso a ocorrencia do historico e truncada em silencio. Encurte o nome em src/secrets.h.");
+static_assert(!algumNomeRepetido(0),
+              "Dois alvos em SECRET_ALVOS tem o mesmo nome. Os nomes aparecem na pagina e no historico, e iguais tornam impossivel saber de qual maquina se fala.");
+static_assert(!algumIpRepetido(0),
+              "Dois alvos em SECRET_ALVOS tem o mesmo IP. Confira os enderecos em src/secrets.h.");
+static_assert(!algumMacRepetido(0),
+              "Dois alvos em SECRET_ALVOS tem o mesmo MAC. Confira os enderecos em src/secrets.h.");
+static_assert(!algumIpForaDaFaixa(0),
+              "Um octeto de IP em SECRET_ALVOS esta fora de 0..255. Confira em src/secrets.h.");
+static_assert(!algumMacForaDaFaixa(0),
+              "Um byte de MAC em SECRET_ALVOS esta fora de 0..255. Confira em src/secrets.h.");
+static_assert(!algumBootForaDaFaixa(0),
+              "Um tempo de boot em SECRET_ALVOS esta fora de 10..600 s. E o tempo que a maquina leva para responder ao ping depois do Wake-on-LAN.");
+static_assert(!algumIpExemplo(0),
+              "Um IP em SECRET_ALVOS ainda e o do exemplo. Troque em src/secrets.h pelo IP real do alvo.");
+static_assert(!algumMacExemplo(0),
+              "Um MAC em SECRET_ALVOS ainda e o do exemplo. Troque em src/secrets.h pelo MAC real do alvo.");
+
+// O teto vem ANTES da trava de N_ALVOS == 1 de proposito: com uma lista
+// de 13 maquinas as duas disparam, e a do teto e a que diz o que de fato
+// precisa mudar.
+static_assert(N_ALVOS <= TETO_DE_ALVOS,
+              "SECRET_ALVOS tem mais alvos do que o teto do projeto. Veja TETO_DE_ALVOS no main.cpp.");
+
+// ---- TRAVA TEMPORARIA - SAI NA ETAPA 3 ------------------------------
+// A etapa 1 troca o CONTRATO de configuracao e nada mais: o firmware
+// continua vigiando uma maquina so, pelos apelidos de ALVOS[0].
+//
+// Sem esta trava, quem pusesse duas maquinas na lista teria a segunda
+// IGNORADA EM SILENCIO - a pagina mostraria uma, o ping olharia uma, e
+// nada no aparelho diria que a outra existe. E o tipo de falha que so
+// aparece no dia em que a maquina esquecida nao acorda.
+//
+// Ela sai na etapa 3, quando o escalonador passar a percorrer a lista.
+static_assert(N_ALVOS == 1,
+              "SECRET_ALVOS ainda aceita um alvo so: o firmware desta etapa vigia uma maquina. A lista com varias entra na etapa 3.");
 
 // Comparacao byte a byte com os valores de exemplo, para pegar o "copiei
 // o template e esqueci de editar". Continua servindo aos enderecos do
