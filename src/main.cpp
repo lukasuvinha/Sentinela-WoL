@@ -67,17 +67,67 @@ const char* WIFI_SSID     = SECRET_WIFI_SSID;
 const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
 
 // --- Alvo ---
-// Os tres campos abaixo descrevem a maquina vigiada e vem do secrets.h,
-// que fica fora do git: sao dados da rede de quem instalou, nao do
-// projeto. Trocar os tres adapta a sentinela para outra maquina, sem
-// tocar em logica nenhuma.
+// ---- As maquinas vigiadas ------------------------------------------
+// Vem do secrets.h como UMA lista, e nao mais como tres campos soltos:
+// sao dados da rede de quem instalou, nao do projeto.
+//
+// Ipv4 e Mac sao structs com construtor que EXIGE 4 e 6 argumentos, e nao
+// vetores comuns. A diferenca decide um defeito silencioso: vetor comum
+// aceita { 192, 168, 1 } e preenche o que falta com ZERO, entao o alvo
+// viraria 192.168.1.0 sem uma unica mensagem, e a sentinela passaria a
+// pingar um endereco que nao existe. Com construtor, faltar um argumento
+// e erro de compilacao, com o numero da linha.
+//
+// E este nao e um risco teorico: o projeto ja perdeu tempo com um MAC de
+// exemplo esquecido no firmware - ver o EPISODIO REGISTRADO abaixo.
+//
+// Guardam int, e nao uint8_t, tambem de proposito. Com uint8_t o 256
+// chegaria aqui ja truncado para 0, e a trava de faixa nao teria o que
+// reclamar: ela veria um zero legitimo. Guardando int, o valor chega
+// inteiro e a mensagem pode dizer qual octeto esta fora. A conversao para
+// uint8_t acontece no uso, nao no armazenamento.
+struct Ipv4 {
+  int o[4];
+  constexpr Ipv4(int a, int b, int c, int d) : o{a, b, c, d} {}
+};
 
-// So o nome usado nas mensagens da serial e na pagina de status.
-const char* ALVO_NOME = SECRET_ALVO_NOME;
+struct Mac {
+  int b[6];
+  constexpr Mac(int b0, int b1, int b2, int b3, int b4, int b5)
+      : b{b0, b1, b2, b3, b4, b5} {}
+};
 
-// MAC da interface cabeada do alvo (NAO e o MAC do ESP32).
-// Windows: ipconfig /all   |   Linux: ip link
-byte ALVO_MAC[6] = { SECRET_ALVO_MAC };
+// Uma maquina vigiada: como chamar, onde pingar, para onde mandar o magic
+// packet, e quanto tempo ela costuma levar para subir.
+//
+// O tempo de boot era uma constante global na v1.0 (ESPERA_POS_WOL_MS).
+// Virou coluna da lista porque e caracteristica da MAQUINA e nao do
+// projeto: um NAS sobe em 40 s e um servidor grande leva tres minutos.
+struct Alvo {
+  const char* nome;
+  Ipv4        ip;
+  Mac         mac;    // da interface CABEADA do alvo, nao do ESP32
+  int         bootSegundos;
+};
+
+// Tetos de PROJETO, nao de instalacao - por isso vivem aqui e nao no
+// secrets.h.
+//
+// O teto de 12 nao e limite de memoria: cem maquinas caberiam em poucos
+// KB. E limite de TEMPO. No pior caso, com todas desligadas, cada
+// verificacao custa ~3,6 s de ping, e o compromisso do projeto e olhar
+// cada maquina a cada 5 min. Doze deixam folga larga; o numero volta a
+// ser discutido quando o escalonador existir.
+constexpr int TETO_DE_ALVOS = 12;
+
+// Faixa aceitavel para o tempo de boot declarado de cada maquina.
+// Abaixo de 10 s nao existe maquina que suba; acima de 600 s o mais
+// provavel e que alguem tenha escrito milissegundos no campo de segundos.
+constexpr int BOOT_MIN_S = 10;
+constexpr int BOOT_MAX_S = 600;
+
+constexpr Alvo ALVOS[] = SECRET_ALVOS;
+constexpr int  N_ALVOS = sizeof(ALVOS) / sizeof(ALVOS[0]);
 
 // EPISODIO REGISTRADO - nao ha codigo para reativar aqui.
 //
@@ -89,15 +139,27 @@ byte ALVO_MAC[6] = { SECRET_ALVO_MAC };
 //
 // Fica anotado porque o sintoma - WoL "funcionando" e alvo que nunca
 // acorda - e dos mais dificeis de diagnosticar do zero. E foi esse
-// episodio que motivou as travas de compilacao de SECRET_ALVO_MAC e
-// SECRET_ALVO_IP, mais abaixo: hoje um MAC de exemplo esquecido nao
-// chega a virar firmware.
+// episodio que motivou as travas de compilacao da lista, mais abaixo:
+// hoje um MAC de exemplo esquecido nao chega a virar firmware.
 
-// IP fixo do alvo, usado pelo ping. Precisa ser fixo: com DHCP o
-// endereco muda e a sentinela passa a pingar outra maquina, ou nenhuma.
-// Na instalacao que originou o projeto, e fixado por netplan no proprio
-// servidor, sem reserva de DHCP no roteador.
-IPAddress ALVO_IP(SECRET_ALVO_IP);
+// ---- Apelidos para ALVOS[0] ----------------------------------------
+// TEMPORARIOS. Existem para que o resto do arquivo nao mude nesta etapa:
+// a etapa 1 troca o CONTRATO de configuracao e mais nada, e qualquer
+// diferenca de comportamento em relacao a v1.0 aqui e defeito, nao
+// funcionalidade.
+//
+// SOMEM NA ETAPA 2, quando as funcoes passarem a receber o alvo por
+// parametro em vez de ler variavel global. Enquanto existirem, o
+// static_assert de N_ALVOS == 1 garante que nao ha maquina sendo
+// ignorada em silencio.
+const char* ALVO_NOME = ALVOS[0].nome;
+
+byte ALVO_MAC[6] = {
+    (byte)ALVOS[0].mac.b[0], (byte)ALVOS[0].mac.b[1], (byte)ALVOS[0].mac.b[2],
+    (byte)ALVOS[0].mac.b[3], (byte)ALVOS[0].mac.b[4], (byte)ALVOS[0].mac.b[5]};
+
+IPAddress ALVO_IP(ALVOS[0].ip.o[0], ALVOS[0].ip.o[1],
+                  ALVOS[0].ip.o[2], ALVOS[0].ip.o[3]);
 
 // --- Endereco do proprio ESP32 ---
 // IP fixo para que a pagina de status tenha um endereco estavel. Com DHCP
@@ -137,7 +199,10 @@ const unsigned long WIFI_TIMEOUT_MS = 3UL * 60UL * 1000UL;  // 3 min
 const unsigned long ESPERA_ANTES_DE_REINICIAR_MS = 10UL * 1000UL;  // 10 s
 
 const unsigned long INTERVALO_MONITORAMENTO_MS = 5UL * 60UL * 1000UL;  // 5 min
-const unsigned long ESPERA_POS_WOL_MS          = 90UL * 1000UL;        // 90 s
+// Vem da lista, e nao mais de uma constante global: o tempo de boot e
+// caracteristica da maquina. Apelido temporario, como os de cima.
+const unsigned long ESPERA_POS_WOL_MS =
+    (unsigned long)ALVOS[0].bootSegundos * 1000UL;
 const unsigned long INTERVALO_RETENTATIVA_MS   = 5UL * 60UL * 1000UL;  // 5 min
 
 // Quantas tentativas rapidas antes de espacar as retentativas. Evita
@@ -203,10 +268,6 @@ static_assert(!mesmaString(SECRET_WIFI_PASSWORD, "PREENCHER_SENHA_AQUI"),
 static_assert(!vazia(SECRET_WIFI_PASSWORD),
               "SECRET_WIFI_PASSWORD esta vazia em src/secrets.h. Veja o comentario acima se a rede for aberta.");
 
-static_assert(!mesmaString(SECRET_ALVO_NOME, "PREENCHER_NOME_DO_ALVO"),
-              "Preencha SECRET_ALVO_NOME em src/secrets.h antes de compilar.");
-static_assert(!vazia(SECRET_ALVO_NOME),
-              "SECRET_ALVO_NOME esta vazio em src/secrets.h.");
 
 // ---- Teto do nome, e a conta que o produz ----------------------------
 // O nome desemboca no buffer mais apertado do projeto: cada entrada do
@@ -243,10 +304,6 @@ constexpr int ALVO_NOME_MAX = 18;
 // tamanho do historico sem refazer a conta acima para o build.
 constexpr int HISTORICO_TEXTO_ESPELHO = 56;
 
-static_assert(comprimento(SECRET_ALVO_NOME) <= ALVO_NOME_MAX,
-              "SECRET_ALVO_NOME e comprido demais: o maximo e 18 caracteres. "
-              "Acima disso a ocorrencia do historico e truncada em silencio. "
-              "Escolha um nome mais curto em src/secrets.h.");
 
 // Quantos digitos do contador de tentativas cabem no orcamento. Quatro
 // digitos sao 9999 tentativas; com retentativas de 5 min depois das tres
@@ -302,37 +359,12 @@ static_assert(piorCasoOcorrencia(FMT_ALVO_SEM_RESPOSTA, 0)
               "mensagem, ou baixe o ALVO_NOME_MAX, ou aumente o HISTORICO_TEXTO.");
 
 
-// MAC e IP tambem tem trava, e sao os dois campos que mais precisam
-// dela: MAC errado nao gera erro nenhum em execucao (o magic packet sai
-// perfeito para um endereco que nao existe) e IP errado faz a sentinela
-// concluir que o alvo vive desligado. Este projeto ja foi vitima desse
-// exato bug - ver o registro no topo do arquivo.
-//
-// O tamanho dos vetores abaixo e DEDUZIDO da lista do secrets.h, e nao
-// fixado em 6 e 4. E isso que permite pegar um MAC com cinco bytes, que
-// de outra forma compilaria e teria o sexto preenchido com zero em
-// silencio.
-constexpr byte    MAC_CONFERENCIA[] = { SECRET_ALVO_MAC };
-constexpr uint8_t IP_CONFERENCIA[]  = { SECRET_ALVO_IP };
-
-static_assert(sizeof(MAC_CONFERENCIA) == 6,
-              "SECRET_ALVO_MAC precisa ter exatamente 6 bytes em src/secrets.h.");
-static_assert(sizeof(IP_CONFERENCIA) == 4,
-              "SECRET_ALVO_IP precisa ter exatamente 4 octetos em src/secrets.h.");
-
-// Comparacao byte a byte com os valores de exemplo do secrets.example.h,
-// para pegar o "copiei o template e esqueci de editar".
+// Comparacao byte a byte com os valores de exemplo, para pegar o "copiei
+// o template e esqueci de editar". Continua servindo aos enderecos do
+// proprio aparelho, que seguem sendo tres campos soltos no secrets.h.
 constexpr bool mesmoVetor(const uint8_t* a, const uint8_t* b, int n) {
   return n == 0 || (*a == *b && mesmoVetor(a + 1, b + 1, n - 1));
 }
-
-constexpr uint8_t MAC_EXEMPLO[] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
-constexpr uint8_t IP_EXEMPLO[]  = { 192, 168, 1, 100 };
-
-static_assert(!mesmoVetor(MAC_CONFERENCIA, MAC_EXEMPLO, 6),
-              "SECRET_ALVO_MAC ainda e o exemplo. Troque em src/secrets.h pelo MAC real do alvo.");
-static_assert(!mesmoVetor(IP_CONFERENCIA, IP_EXEMPLO, 4),
-              "SECRET_ALVO_IP ainda e o exemplo. Troque em src/secrets.h pelo IP real do alvo.");
 
 // Mesmas travas para os enderecos do proprio aparelho.
 constexpr uint8_t ESP32_CONFERENCIA[]   = { SECRET_ESP32_IP };
