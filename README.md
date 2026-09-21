@@ -881,7 +881,14 @@ Algumas placas exigem segurar o botão **BOOT** durante o início do
 upload (quando aparece `Connecting....`), soltando depois.
 
 Referência de tamanho de um build limpo (esp32dev, 4 MB flash):
-RAM 14,3% (46.776 B), Flash 60,1% (787.193 B).
+RAM 14,3% (46.776 B), Flash 60,1% (787.265 B).
+
+<!-- Estes dois numeros sao MEDIDOS, nao mantidos a mao: saem do
+     "pio run" e mudam a cada alteracao que mexa no tamanho do binario.
+     Quem os atualizar, copie da saida do build em vez de estimar. O
+     valor de Flash ficou desatualizado da v1.0 ate 19/09 por ter sido
+     escrito uma vez e nao reconferido. -->
+
 Nos exemplos abaixo o campo **nome** da entrada em `SECRET_ALVOS` está
 preenchido com `servidor`, e MAC e IP aparecem como placeholders.
 
@@ -1105,6 +1112,27 @@ mensagem.
 **Quem mexer no texto das ocorrências precisa refazer esta conta.** E se
 mudar o `HISTORICO_TEXTO`, um segundo `static_assert` para o build e manda
 refazê-la.
+
+#### O 18 aparece escrito à mão em quatro textos, e não há como evitar
+
+O número **vive em `ALVO_NOME_MAX`**, no `main.cpp`, e é de lá que todas
+as travas o leem. Mas quatro **textos** o repetem por extenso: a mensagem
+do `static_assert` do nome, o comentário do `secrets.example.h`, e duas
+linhas deste README.
+
+Não é descuido, e não há conserto limpo: em C++11 a mensagem de um
+`static_assert` precisa ser um literal de string, e **não existe forma de
+montá-la a partir de uma constante**. As três travas irmãs — as que
+conferem o texto das ocorrências — conseguem citar `ALVO_NOME_MAX`
+simbolicamente porque falam *sobre* a constante em vez de dizer o valor
+dela; a do nome precisa dizer o número, porque é o número que a pessoa
+tem que respeitar.
+
+**Consequência prática: mudar `ALVO_NOME_MAX` obriga a revisar esses
+quatro textos à mão.** Estão listados aqui para que a revisão seja uma
+busca por `18` e não uma caçada. É o mesmo padrão do `24h` e do `10s`,
+com a diferença de que estes não têm como ser derivados — o registro
+substitui a trava que não é possível escrever.
 
 #### As travas de natureza diferente
 
