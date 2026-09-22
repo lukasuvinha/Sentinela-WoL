@@ -815,6 +815,36 @@ Demais regras:
   storage já ficou em NVS e não há segunda chance. Quem reordenar o
   `setup()` desfaz a proteção sem nenhum aviso do compilador.
 
+### Exemplo nunca usa a rede real
+
+Endereço de exemplo, em qualquer lugar que vá para o repositório —
+comentário do código, README, `secrets.example.h`, mensagem de commit —
+usa a faixa `192.168.1.x`, nome de máquina genérico e o MAC
+`AA:BB:CC:DD:EE:FF`. Na prosa, onde o valor não precisa ser concreto, o
+README escreve `192.168.X.Y`.
+
+A regra existe porque a violação já aconteceu duas vezes, e das duas o
+gesto foi o mesmo: escrever o exemplo copiando o valor que estava na tela.
+Na primeira, o nome real da máquina entrou num diagrama do README, e saiu
+numa reescrita de histórico. Na segunda, o prefixo real da rede entrou num
+comentário do `main.cpp` que explicava justamente por que um vetor curto é
+perigoso — e daí na mensagem do commit. Foi pego antes do push, e refazer
+os quatro commits custou minutos, não uma reescrita de histórico já
+publicado.
+
+Nada disso é credencial: IP privado não abre porta nenhuma. O que ele faz
+é entregar o desenho da rede de quem publicou, de graça e para sempre, num
+repositório que existe para ser lido por estranhos.
+
+A conferência fica no verificador de canais, que **não é versionado** e
+vive fora do repositório. Ele monta o que procurar a partir do
+`src/secrets.h` e varre os arquivos rastreados, as mensagens dos commits
+que ainda não foram publicados e o conteúdo acrescentado por esses
+commits — este último porque um valor que entra num commit e sai no
+seguinte some da árvore e permanece no histórico. Só roda onde o
+`secrets.h` existe, ou seja, na máquina de quem instalou, e nunca imprime
+o valor que procura: só o campo e o lugar.
+
 ---
 
 ## Como gravar no ESP32
@@ -1390,8 +1420,13 @@ recuperação escolhido.
   nem estouro de buffer.
 - Conversão de `IPAddress` para o `ip4_addr_t` do lwIP conferida contra
   as macros reais (`LWIP_MAKEU32` + `PP_HTONL`): os dois lados produzem
-  `0xC312A8C0` para 192.168.X.Y. Um erro de ordem de bytes aqui faria
+  `0x6401A8C0` para `192.168.1.100`. Um erro de ordem de bytes aqui faria
   a sentinela pingar outro host sem avisar.
+
+  <!-- A constante acima tem que ser a do endereço de EXEMPLO, e conferida
+       junto com ele. Endereço real escrito em hexadecimal passa
+       despercebido numa revisão: a prosa ao lado mascara o endereço, e a
+       constante o entrega inteiro. Ver "Exemplo nunca usa a rede real". -->
 - Máquina de estados simulada em quatro cenários (já ligado no boot;
   sobe com 1 WoL; resiste a 5 WoL; cai durante o monitoramento). As
   transições e os intervalos batem com o especificado.
