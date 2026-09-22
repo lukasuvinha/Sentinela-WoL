@@ -11,11 +11,11 @@ subir. Serve uma página de status HTTP para consulta pelo navegador.
 Não depende de servidor, serviço externo ou nuvem: a decisão inteira
 acontece no próprio aparelho, dentro da rede local.
 
-Toda a configuração vive em `src/secrets.h`, um arquivo de **oito
-campos** que não vai para o git. Três deles descrevem o alvo — nome, IP e
-MAC — e trocar esses três aponta a sentinela para outra máquina da mesma
-rede sem alterar código; os outros cinco descrevem a rede Wi-Fi e o
-endereço do próprio ESP32. Na instalação que originou o projeto, o alvo é
+Toda a configuração vive em `src/secrets.h`, um arquivo de **seis
+campos** que não vai para o git. Um deles é a lista de máquinas vigiadas
+— cada entrada traz nome, IP, MAC e tempo de boot — e mudar essa entrada
+aponta a sentinela para outra máquina da mesma rede sem alterar código;
+os outros cinco descrevem a rede Wi-Fi e o endereço do próprio ESP32. Na instalação que originou o projeto, o alvo é
 um notebook reaproveitado rodando Ubuntu Server como servidor de homelab;
 os exemplos deste README usam esse caso.
 
@@ -854,11 +854,11 @@ o valor que procura: só o campo e o lugar.
 ```bash
 cd /caminho/para/sentinela-wol
 cp src/secrets.example.h src/secrets.h   # se ainda nao existir
-$EDITOR src/secrets.h                     # preencher os OITO campos
+$EDITOR src/secrets.h                     # preencher os SEIS campos
 ```
 
-São oito campos, não dois: as duas credenciais de Wi-Fi, os três do alvo
-e os três de endereço do próprio ESP32. A seção
+São seis campos, não dois: as duas credenciais de Wi-Fi, a lista de
+máquinas vigiadas e os três de endereço do próprio ESP32. A seção
 [Configuração](#configuração) traz cada um em tabela, com o que é e onde
 descobrir o valor.
 
@@ -1466,14 +1466,21 @@ recuperação escolhido.
   callbacks não definidos (`on_ping_success`, `on_ping_timeout`) passam
   por checagem de ponteiro nulo antes da chamada indireta — o que antes
   só se sabia por desmontagem do `.obj` do toolchain.
-- **Travas de compilação dos oito campos do `secrets.h`**, testadas uma a
-  uma com o build falhando de propósito em cada caso: template intocado,
-  SSID vazio, senha vazia, nome do alvo não editado, MAC de exemplo, IP
-  do alvo de exemplo, IP do ESP32 de exemplo, gateway de exemplo, e
-  máscara com número errado de octetos. A máscara `255, 255, 255, 0` foi
-  testada em separado para confirmar que ela **compila** — sem esse
-  teste, a ausência de trava de valor nela seria afirmação não
-  verificada.
+- **Travas de compilação dos oito campos do `secrets.h`** — registro
+  histórico da **v1.0**, quando o arquivo tinha oito campos e o alvo
+  ocupava três deles. Testadas uma a uma, com o build falhando de
+  propósito em cada caso: template intocado, SSID vazio, senha vazia,
+  nome do alvo não editado, MAC de exemplo, IP do alvo de exemplo, IP do
+  ESP32 de exemplo, gateway de exemplo, e máscara com número errado de
+  octetos. A máscara `255, 255, 255, 0` foi testada em separado para
+  confirmar que ela **compila** — sem esse teste, a ausência de trava de
+  valor nela seria afirmação não verificada.
+
+  O oito fica aqui de propósito: esta seção diz o que foi **testado**, e
+  não como o arquivo é hoje. Hoje são seis campos, porque nome, IP e MAC
+  do alvo viraram uma entrada de `SECRET_ALVOS`. As travas equivalentes no
+  formato novo estão em
+  [Erro de compilação esperado](#erro-de-compilação-esperado).
 - **Caminho único de reinício.** Não existe `ESP.restart()` solto no
   `main.cpp`: todos os motivos passam por `reiniciar()`, que grava o
   texto em RTC RAM antes de reiniciar. Conferido por varredura no
